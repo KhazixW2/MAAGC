@@ -1,0 +1,49 @@
+{
+    "Map_MoveMainCityRight": {
+        "recognition": "DirectHit",
+        "action": "Swipe",
+        "begin": [
+            613,
+            965,
+            1,
+            1
+        ],
+        "end": [
+            673,
+            964,
+            1,
+            1
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Map_MoveMainCityLeft": {
+        "recognition": "DirectHit",
+        "action": "Swipe",
+        "begin": [
+            610,
+            961,
+            1,
+            1
+        ],
+        "end": [
+            541,
+            962,
+            1,
+            1
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Map_CheckCurrentMonth": {
+        "recognition": "OCR",
+        "expected": "2023年12月",
+        "roi": [
+            284,
+            6,
+            149,
+            108
+        ],
+        "timeout": 2000
+    }
+}

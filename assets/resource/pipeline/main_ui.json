@@ -1,0 +1,130 @@
+{
+    "UI_MainWindows": {
+        "recognition": "TemplateMatch",
+        "template": "UI/MercenaryLogo.png",
+        "roi": [
+            564,
+            1116,
+            156,
+            164
+        ],
+        "timeout": 2000,
+        "post_delay": 1000
+    },
+    "UI_RoleListPage": {
+        "recognition": "OCR",
+        "roi": [
+            15,
+            1166,
+            686,
+            114
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "expected": "角色",
+        "timeout": 2000
+    },
+    "UI_RoleFomationPage": {
+        "recognition": "OCR",
+        "roi": [
+            15,
+            1166,
+            686,
+            114
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "expected": "编队",
+        "timeout": 2000
+    },
+    "UI_MapSwitch": {
+        "recognition": "OCR",
+        "roi": [
+            15,
+            1166,
+            686,
+            114
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "expected": [
+            "地图",
+            "群岛",
+            "大陆"
+        ],
+        "timeout": 2000
+    },
+    "UI_CastlePage": {
+        "recognition": "OCR",
+        "roi": [
+            15,
+            1166,
+            686,
+            114
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "expected": "城堡",
+        "timeout": 2000
+    },
+    "UI_TeamPage": {
+        "recognition": "OCR",
+        "roi": [
+            15,
+            1166,
+            686,
+            114
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "expected": "佣兵团",
+        "timeout": 2000
+    },
+    "UI_TeamPrestigePage": {
+        "recognition": "OCR",
+        "expected": "声望",
+        "roi": [
+            16,
+            566,
+            696,
+            85
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "UI_TeamRankPage": {
+        "recognition": "OCR",
+        "expected": "排行榜",
+        "roi": [
+            16,
+            566,
+            696,
+            85
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "UI_TeamTotalInfoPage": {
+        "recognition": "OCR",
+        "expected": "统计信息",
+        "roi": [
+            16,
+            566,
+            696,
+            85
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "timeout": 2000
+    }
+}
