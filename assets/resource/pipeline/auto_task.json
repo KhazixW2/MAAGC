@@ -1,0 +1,34 @@
+{
+    "test_func": {
+        "action": "Custom",
+        "custom_action": "test_func",
+        "timeout": 2000
+    },
+    "StartCityTask": {
+        "next": [
+            "GetCityTask"
+        ],
+        "timeout": 2000
+    },
+    "GetCityTask": {
+        "next": [
+            "InTaskPannel",
+            "[JumpBack]FindCityTask_OCR",
+            "[JumpBack]SwitchInnerCity",
+            "[JumpBack]EnterCity"
+        ],
+        "timeout": 2000
+    },
+    "InTaskPannel": {
+        "recognition": "OCR",
+        "roi": [
+            284,
+            6,
+            149,
+            108
+        ],
+        "expected": "任务",
+        "timeout": 2000
+    },
+    "GetCityTaskDetails": {}
+}

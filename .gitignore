@@ -452,3 +452,6 @@ tools/ImageCropper/**/*.png
 
 config
 debug
+.nicegui/
+.vscode/
+.venv/

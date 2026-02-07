@@ -1,0 +1,15 @@
+{
+    "BackButton_OCR": {
+        "recognition": "TemplateMatch",
+        "template": "return.png",
+        "roi": [
+            603,
+            0,
+            117,
+            140
+        ],
+        "post_delay": 500,
+        "timeout": 2000,
+        "action": "Click"
+    }
+}
