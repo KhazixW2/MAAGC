@@ -126,5 +126,17 @@
         "target": true,
         "post_delay": 500,
         "timeout": 2000
+    },
+    "UI_Month1": {
+        "recognition": "TemplateMatch",
+        "template": "UI/month/1.png",
+        "roi": [
+            58,
+            2,
+            610,
+            221
+        ],
+        "post_delay": 500,
+        "timeout": 2000
     }
 }
