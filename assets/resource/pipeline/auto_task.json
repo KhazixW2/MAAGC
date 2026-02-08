@@ -6,11 +6,11 @@
     },
     "StartCityTask": {
         "next": [
-            "GetCityTask"
+            "OpenCityTaskPanel"
         ],
         "timeout": 2000
     },
-    "GetCityTask": {
+    "OpenCityTaskPanel": {
         "next": [
             "InTaskPannel",
             "[JumpBack]FindCityTask_OCR",

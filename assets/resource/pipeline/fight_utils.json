@@ -35,6 +35,18 @@
         "post_delay": 500,
         "timeout": 2000
     },
+    "Map_MoveMainCityNow": {
+        "recognition": "DirectHit",
+        "action": "Click",
+        "target": [
+            610,
+            964,
+            10,
+            10
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
     "Map_CheckCurrentMonth": {
         "recognition": "OCR",
         "expected": "2023年12月",
@@ -44,6 +56,25 @@
             149,
             108
         ],
+        "timeout": 2000
+    },
+    "Map_GetMonth": {
+        "recognition": "TemplateMatch",
+        "template": "UI/month/1.png",
+        "roi": [
+            58,
+            2,
+            610,
+            221
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Map_GetMonthFunc": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "FightTestFunc",
+        "post_delay": 500,
         "timeout": 2000
     }
 }
