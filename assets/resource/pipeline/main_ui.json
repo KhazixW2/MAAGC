@@ -126,5 +126,33 @@
         "target": true,
         "post_delay": 500,
         "timeout": 2000
+    },
+    "UI_TaskPannelPageOpen": {
+        "recognition": "TemplateMatch",
+        "template": "UI/TaskPannelPageOpen.png",
+        "roi": [
+            176,
+            1020,
+            342,
+            125
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "UI_TaskPannelPageClose": {
+        "recognition": "TemplateMatch",
+        "template": "UI/TaskPannelPageClose.png",
+        "roi": [
+            176,
+            1020,
+            342,
+            125
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "timeout": 2000
     }
 }

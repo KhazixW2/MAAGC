@@ -109,5 +109,181 @@
         "action": "Click",
         "post_delay": 1000,
         "timeout": 2000
+    },
+    "TaskClaim": {
+        "recognition": "OCR",
+        "expected": [
+            "接受",
+            "放弃"
+        ],
+        "roi": [
+            520,
+            667,
+            173,
+            71
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000
+    },
+    "TaskQuickLocation": {
+        "recognition": "TemplateMatch",
+        "template": "UI/TaskQuickLocation.png",
+        "roi": [
+            0,
+            651,
+            307,
+            499
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "TaskDetailOpen": {
+        "doc": "打开任务详情, 默认位置在屏幕的中间 依赖快速定位任务的功能",
+        "recognition": "DirectHit",
+        "action": "Click",
+        "target": [
+            356,
+            577,
+            10,
+            10
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "TaskDetailClose": {
+        "recognition": "TemplateMatch",
+        "template": "UI/TaskDetailClose.png",
+        "action": "Click",
+        "roi": [
+            566,
+            330,
+            154,
+            586
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "TaskDetailFight": {
+        "recognition": "OCR",
+        "expected": "进入战斗",
+        "roi": [
+            162,
+            971,
+            398,
+            169
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "FightStart": {
+        "recognition": "OCR",
+        "expected": "战斗开始",
+        "roi": [
+            115,
+            1094,
+            495,
+            186
+        ],
+        "action": "Click",
+        "post_delay": 2000,
+        "timeout": 2000
+    },
+    "FightEndRound": {
+        "recognition": "TemplateMatch",
+        "template": "UI/FightEndRound.png",
+        "roi": [
+            115,
+            1094,
+            495,
+            186
+        ],
+        "action": "Click",
+        "post_delay": 2000,
+        "timeout": 2000
+    },
+    "FightRivalRound": {
+        "recognition": "OCR",
+        "expected": "对方回合",
+        "roi": [
+            167,
+            470,
+            382,
+            298
+        ],
+        "action": "Click",
+        "post_delay": 2000,
+        "timeout": 2000
+    },
+    "FightOurRound": {
+        "recognition": "OCR",
+        "expected": "你的回合",
+        "roi": [
+            167,
+            470,
+            382,
+            298
+        ],
+        "action": "Click",
+        "post_delay": 2000,
+        "timeout": 2000
+    },
+    "FightFail": {
+        "recognition": "TemplateMatch",
+        "template": "UI/FightFail.png",
+        "roi": [
+            154,
+            232,
+            480,
+            676
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "FightVictory": {
+        "recognition": "OCR",
+        "expected": "战斗胜利",
+        "roi": [
+            201,
+            86,
+            305,
+            215
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "FightDefeat": {
+        "recognition": "OCR",
+        "expected": "战斗失败",
+        "roi": [
+            201,
+            86,
+            305,
+            215
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "FightResultConfirm": {
+        "recognition": "OCR",
+        "expected": [
+            "确定",
+            "放弃"
+        ],
+        "roi": [
+            207,
+            1020,
+            251,
+            220
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
     }
 }
