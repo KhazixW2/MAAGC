@@ -1,0 +1,132 @@
+{
+    "Event_MercenaryJoin": {
+        "recognition": "OCR",
+        "expected": [
+            "加入",
+            "加入佣兵"
+        ],
+        "roi": [
+            194,
+            330,
+            403,
+            121
+        ],
+        "timeout": 2000,
+        "next": [
+            "Event_MercenaryJoinCancel",
+            "Event_MercenaryJoinConfirm"
+        ]
+    },
+    "Event_MercenaryJoinCancel": {
+        "recognition": "OCR",
+        "expected": "取消",
+        "roi": [
+            118,
+            786,
+            500,
+            146
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_MercenaryJoinConfirm": {
+        "recognition": "OCR",
+        "expected": "确认",
+        "roi": [
+            118,
+            786,
+            500,
+            146
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_MercenaryBaby": {
+        "recognition": "OCR",
+        "expected": "孩子出生",
+        "roi": [
+            46,
+            480,
+            640,
+            96
+        ],
+        "timeout": 2000,
+        "next": [
+            "Event_MercenaryBabyConfirm"
+        ]
+    },
+    "Event_MercenaryBabyConfirm": {
+        "recognition": "OCR",
+        "expected": "确",
+        "roi": [
+            179,
+            1164,
+            361,
+            106
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_MercenaryBabyName": {
+        "recognition": "TemplateMatch",
+        "template": "UI/Event_ChildDetail.png",
+        "roi": [
+            22,
+            1003,
+            507,
+            168
+        ],
+        "action": "Click",
+        "target": true,
+        "target_offset": [
+            130,
+            55,
+            0,
+            0
+        ],
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "Event_MercenaryBabyTypeName",
+        ]
+    },
+    "Event_MercenaryBabyTypeName": {
+        "recognition": "DirectHit",
+        "action": "InputText",
+        "input_text": "宝宝名字",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": []
+    },
+    // 事件：启航节
+    "Event_Launch": {
+        "recognition": "OCR",
+        "expected": "启航节",
+        "roi": [
+            194,
+            330,
+            403,
+            121
+        ],
+        "timeout": 2000,
+        "next": [
+            "Event_LaunchConfirm"
+        ]
+    },
+    "Event_LaunchConfirm": {
+        "recognition": "OCR",
+        "expected": "确认",
+        "roi": [
+            118,
+            786,
+            500,
+            146
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    }
+}

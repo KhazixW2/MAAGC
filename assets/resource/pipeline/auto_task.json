@@ -30,5 +30,11 @@
         "expected": "任务",
         "timeout": 2000
     },
-    "GetCityTaskDetails": {}
+    "Auto_FightTask": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "TaskProcessor",
+        "post_delay": 500,
+        "timeout": 2000
+    }
 }
