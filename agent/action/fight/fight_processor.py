@@ -36,6 +36,15 @@ def detect_and_manage_event(context: Context, screenshot) -> str:
         logger.info("  ✓ 检测到佣兵生娃事件")
         context.run_task("Event_MercenaryBaby")
         return "mercenary_baby"
+    # 丰收节事件
+    elif context.run_recognition("Event_HarvestFestival", screenshot).hit:
+        logger.info("  ✓ 检测到丰收节事件")
+        context.run_task("Event_HarvestFestivalDealWith")
+        return "harvest_festival"
+    # elif context.run_recognition("Event_MercenaryRetire", screenshot).hit:
+    #     logger.info("  ✓ 检测到佣兵退休事件")
+    #     context.run_task("Event_MercenaryRetire")
+    #     return "mercenary_retire"
     else:
         logger.info("  ✓ 未检测到随机事件")
         return None
@@ -47,7 +56,7 @@ def check_current_month(context: Context) -> int:
 
     for month in range(1, 13):
         template_name = f"UI/month/{month}.png"
-        logger.info(f"  尝试检测{month}月...")
+        # logger.info(f"  尝试检测{month}月...")
 
         result = context.run_recognition(
             "Map_GetMonth",
@@ -256,8 +265,10 @@ class YearlyTaskProcessor(CustomAction):
         logger.info(f"当前月份为：{start_month}月，将从该月份开始执行一年任务")
 
         for month_offset in range(12):
+
             current_month = ((start_month - 1 + month_offset) % 12) + 1
             process_single_month(context, current_month)
+            time.sleep(3)
 
         logger.info("========== 年度任务处理完成 ==========")
         return CustomAction.RunResult(success=True)

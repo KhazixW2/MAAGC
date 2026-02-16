@@ -127,7 +127,9 @@ def _preprocess_accept_task(context: Context) -> bool:
 
     # 1.3 移动到当前所在区域的主城
     logger.info("步骤 1.2: 移动到当前所在区域的主城")
-    context.run_task("Map_MoveMainCityNow")
+    # context.run_task("Map_MoveMainCityNow")
+    context.run_task("Map_MoveMainCityLeft")
+    context.run_task("Map_MoveMainCityRight")
     logger.info("✓ 已执行移动到主城")
 
     # 1.4 打开当前主城的任务面板
@@ -258,6 +260,9 @@ def _process_fight(context: Context) -> bool:
     battle_result = None
     while True:
         img = context.tasker.controller.post_screencap().wait().get()
+        if context.tasker.stopping:
+            logger.info("战斗过程中收到停止信号，退出战斗循环")
+            break
         if context.run_recognition("FightFail", img).hit:
             logger.error("战斗失败")
             battle_result = False

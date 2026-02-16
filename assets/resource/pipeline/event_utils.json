@@ -230,4 +230,105 @@
         "post_delay": 500,
         "timeout": 2000
     },
+    // 事件：丰收节
+    "Event_HarvestFestival": {
+        "recognition": "OCR",
+        "expected": "丰收节",
+        "roi": [
+            133,
+            234,
+            402,
+            166
+        ],
+        "action": "Click",
+        "target": [
+            244,
+            813,
+            287,
+            261
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_HarvestFestivalDealWith": {
+        "next": [
+            "UI_MainWindows",
+            "[JumpBack]Event_HarvestFestivalWorship",
+            "[JumpBack]Event_HarvestFestivalPrePay",
+            "[JumpBack]Event_HarvestFestivalAnnuaClosing",
+            "[JumpBack]Event_HarvestFestival"
+        ]
+    },
+    "Event_HarvestFestivalAnnuaClosing": {
+        "recognition": "OCR",
+        "expected": "年度结算",
+        "roi": [
+            42,
+            70,
+            121,
+            332
+        ],
+        "timeout": 2000,
+        "next": [
+            "Event_HarvestFestivalConfirm"
+        ]
+    },
+    // 口粮预交
+    "Event_HarvestFestivalPrePay": {
+        "recognition": "OCR",
+        "expected": "口粮预交",
+        "roi": [
+            28,
+            266,
+            153,
+            144
+        ],
+        "timeout": 2000,
+        "next": [
+            "Event_HarvestFestivalConfirm"
+        ]
+    },
+    "Event_HarvestFestivalConfirm": {
+        "recognition": "OCR",
+        "expected": "确定",
+        "roi": [
+            266,
+            564,
+            199,
+            575
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    //  worship
+    "Event_HarvestFestivalWorship": {
+        "recognition": "OCR",
+        "expected": "祈祷",
+        "roi": [
+            227,
+            1142,
+            266,
+            130
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "Event_HarvestFestivalConfirm"
+        ]
+    },
+    "Event_HarvestFestivalWorshipConfirm": {
+        "recognition": "OCR",
+        "expected": "确定",
+        "roi": [
+            417,
+            469,
+            217,
+            516
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    }
 }
