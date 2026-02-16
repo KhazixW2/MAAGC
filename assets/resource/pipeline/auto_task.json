@@ -36,5 +36,12 @@
         "custom_action": "TaskProcessor",
         "post_delay": 500,
         "timeout": 2000
+    },
+    "Auto_YearlyTask": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "YearlyTaskProcessor",
+        "post_delay": 500,
+        "timeout": 3000
     }
 }
