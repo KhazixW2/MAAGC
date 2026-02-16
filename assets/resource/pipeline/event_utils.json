@@ -106,27 +106,128 @@
         "recognition": "OCR",
         "expected": "启航节",
         "roi": [
-            194,
-            330,
-            403,
-            121
-        ],
-        "timeout": 2000,
-        "next": [
-            "Event_LaunchConfirm"
-        ]
-    },
-    "Event_LaunchConfirm": {
-        "recognition": "OCR",
-        "expected": "确认",
-        "roi": [
-            118,
-            786,
-            500,
-            146
+            184,
+            203,
+            349,
+            162
         ],
         "action": "Click",
         "post_delay": 500,
         "timeout": 2000
-    }
+    },
+    "Event_LaunchEnter": {
+        "recognition": "OCR",
+        "expected": "前去",
+        "roi": [
+            79,
+            442,
+            577,
+            444
+        ],
+        "order_by": "Vertical",
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_LaunchLongDistance": {
+        "recognition": "OCR",
+        "expected": "距离过远",
+        "roi": [
+            83,
+            290,
+            583,
+            600
+        ],
+        "timeout": 2000
+    },
+    "Event_LaunchPage": {
+        "recognition": "OCR",
+        "expected": "启航节",
+        "roi": [
+            76,
+            230,
+            573,
+            495
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_LaunchPageShopping": {
+        "recognition": "DirectHit",
+        "custom_action": "LaunchShopping",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_LaunchGoods": {
+        "recognition": "OCR",
+        "expected": "剩余",
+        "roi": [
+            279,
+            440,
+            161,
+            725
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_LaunchGoodsBuy": {
+        "recognition": "OCR",
+        "expected": "兑换",
+        "roi": [
+            515,
+            1128,
+            189,
+            139
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_LaunchGoodsBuyMax": {
+        "recognition": "TemplateMatch",
+        "template": "UI/Event_LaunchGoodsMax.png",
+        "roi": [
+            420,
+            585,
+            187,
+            280
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_LaunchGoodsBuyConfirm": {
+        "recognition": "OCR",
+        "expected": [
+            "确认",
+            "确定"
+        ],
+        "roi": [
+            395,
+            613,
+            229,
+            273
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "Event_LaunchGoodsBuySuccessSkip"
+        ]
+    },
+    "Event_LaunchGoodsBuySuccessSkip": {
+        "recognition": "OCR",
+        "expected": "任意处",
+        "roi": [
+            395,
+            613,
+            229,
+            273
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
 }

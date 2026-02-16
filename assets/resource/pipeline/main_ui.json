@@ -155,7 +155,26 @@
         "post_delay": 500,
         "timeout": 2000
     },
-    "BackButton_OCR": {
+    "UI_ReturnBigMap": {
+        "next": [
+            "UI_MainWindows",
+            "[JumpBack]BackButton_500ms",
+            "ClickCenter_500ms"
+        ]
+    },
+    "ClickCenter_500ms": {
+        "recognition": "DirectHit",
+        "action": "Click",
+        "target": [
+            360,
+            640,
+            10,
+            10
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "BackButton_500ms": {
         "recognition": "TemplateMatch",
         "template": "return.png",
         "roi": [

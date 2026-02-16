@@ -2,6 +2,7 @@ from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
 from utils import logger
+import time
 
 import action.fight.fight_utils as fight_utils
 
@@ -45,7 +46,7 @@ class TaskProcessor(CustomAction):
         # 4. 过完节之后检查当前的主城，然后接取主城任务
         logger.info(f" 接取主城任务")
         logger.info(f"  进入主城并接取任务...")
-        # fight_utils.start_task(context)
+        fight_utils.start_task(context)
         logger.info(f"  主城任务流程执行完成")
 
         return CustomAction.RunResult(success=True)
@@ -62,24 +63,16 @@ class TaskProcessor(CustomAction):
             screenshot = context.tasker.controller.post_screencap().wait().get()
 
             # 检测是否有事件弹窗
-            event_type = self._detect_event(context, screenshot)
+            event_type = self._detectAndManage_event(context, screenshot)
 
             if event_type is None:
                 logger.info("  ✓ 未检测到随机事件，前处理完成")
                 return True
 
-            logger.info(f"  检测到事件类型: {event_type}")
-
-            # 处理对应事件
-            handled = self._handle_event(context, event_type)
-            if not handled:
-                logger.error(f"  ✗ 事件处理失败: {event_type}")
-                return False
-
         logger.warning("  ⚠ 达到最大迭代次数，前处理结束")
         return True
 
-    def _detect_event(self, context: Context, screenshot) -> str:
+    def _detectAndManage_event(self, context: Context, screenshot) -> str:
         """检测事件类型"""
         # TODO: 根据实际图片识别事件类型
         # 1. 检测是否有佣兵加入事件
@@ -173,8 +166,82 @@ class TaskProcessor(CustomAction):
 
     def _handle_sailing_festival(self, context: Context) -> bool:
         """处理启航节（3月）"""
-        logger.info("    处理启航节：需要检查当前城市，进入对应启航节城市")
-        # TODO: 检查当前城市，进入对应的启航节城市
+        # 0. 检查当前月份是否是3月
+        current_month = self._check_current_month(context)
+        if current_month != 3:
+            logger.warning(f"当前月份不是3月，而是{current_month}月，跳过启航节")
+            return True
+
+        # 1. 检查是否有启航节，进入对应启航节城市
+        if not context.run_recognition(
+            "Event_Launch", context.tasker.controller.post_screencap().wait().get()
+        ).hit:
+            logger.info("  ✓ 启航节已经过了")
+            return False
+        logger.info("  ✓ 检测到启航节")
+
+        # 2. 检查是否能够抵达启航节城市
+        context.run_task("Event_Launch")
+        if context.run_recognition(
+            "Event_LaunchEnter", context.tasker.controller.post_screencap().wait().get()
+        ).hit:
+            logger.info("  ✓ 检测到进入启航节城市")
+            context.run_task("Event_LaunchEnter")
+        elif context.run_recognition(
+            "Event_LaunchLongDistance",
+            context.tasker.controller.post_screencap().wait().get(),
+        ).hit:
+            logger.info("  ✓ 检测到启航节城市距离过远")
+            return False
+
+        # 3. 进入城市启航节页面
+        if context.run_recognition(
+            "Event_LaunchPage", context.tasker.controller.post_screencap().wait().get()
+        ).hit:
+            logger.info("  ✓ 检测到城市启航节页面")
+            context.run_task("Event_LaunchPage")
+        else:
+            logger.error("  ✗ 无法进入城市启航节页面")
+            return False
+
+        # 4. 检测有几个商品
+        recoDetail = context.run_recognition(
+            "Event_LaunchGoods", context.tasker.controller.post_screencap().wait().get()
+        )
+
+        if recoDetail.hit:
+            logger.info(f"  ✓ 检测到有{len(recoDetail.filtered_results)}件商品")
+            for good in recoDetail.filtered_results:
+                # 1. 点击商品
+                box = good.box
+                rect_x, rect_y = (
+                    box[0] + box[2] // 2,
+                    box[1] + box[3] // 2,
+                )
+                logger.info(f"  ✓ 点击商品：{good.text}，坐标：({rect_x}, {rect_y})")
+                context.tasker.controller.post_click(rect_x, rect_y).wait()
+                time.sleep(0.5)
+
+                # 2. 点击购买
+                context.run_task("Event_LaunchGoodsBuy")
+
+                # 3. 检测是否存在最大商品图标
+                if context.run_recognition(
+                    "Event_LaunchGoodsBuyMax",
+                    context.tasker.controller.post_screencap().wait().get(),
+                ).hit:
+                    logger.info("  ✓ 检测到最大商品图标")
+                    context.run_task("Event_LaunchGoodsBuyMax")
+
+                # 4. 确定购买
+                context.run_task("Event_LaunchGoodsBuyConfirm")
+                logger.info("  ✓ 确认购买")
+
+        else:
+            logger.info("  ✓ 检测到没有商品")
+
+        # 5. 节日完成后，返回大地图
+        context.run_task("UI_ReturnBigMap")
         return True
 
     def _handle_harvest_festival(self, context: Context) -> bool:
