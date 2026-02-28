@@ -246,16 +246,19 @@
     },
     "FightVictory": {
         "recognition": "OCR",
-        "expected": "战斗胜利",
+        "expected": "任务完成",
         "roi": [
-            201,
-            86,
-            305,
-            215
+            152,
+            229,
+            408,
+            481
         ],
         "action": "Click",
         "post_delay": 500,
-        "timeout": 2000
+        "timeout": 2000,
+        "next": [
+            "FightResultConfirm"
+        ]
     },
     "FightDefeat": {
         "recognition": "OCR",
@@ -270,6 +273,60 @@
         "post_delay": 500,
         "timeout": 2000
     },
+    "FightResultLearnSkill": {
+        "recognition": "OCR",
+        "expected": [
+            "学会"
+        ],
+        "roi": [
+            230,
+            181,
+            234,
+            326
+        ],
+        "action": "Click",
+        "target": true,
+        "target_offset": [
+            0,
+            350,
+            0,
+            0
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "FightPopUp": {
+        "recognition": "OCR",
+        "expected": [
+            "提示"
+        ],
+        "roi": [
+            259,
+            328,
+            225,
+            558
+        ],
+        "next": [
+            "FightPopUpConfirm"
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "FightPopUpConfirm": {
+        "recognition": "OCR",
+        "expected": [
+            "确定"
+        ],
+        "roi": [
+            223,
+            154,
+            261,
+            1095
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
     "FightResultConfirm": {
         "recognition": "OCR",
         "expected": [
@@ -277,13 +334,36 @@
             "放弃"
         ],
         "roi": [
-            207,
-            1020,
-            251,
-            220
+            246,
+            714,
+            234,
+            517
         ],
         "action": "Click",
-        "post_delay": 500,
+        "post_delay": 1000,
+        "timeout": 2000,
+        "next": [
+            "FightResultReceiveReward"
+        ]
+    },
+    "FightResultReceiveReward": {
+        "recognition": "OCR",
+        "expected": "获得",
+        "roi": [
+            185,
+            220,
+            313,
+            369
+        ],
+        "action": "Click",
+        "target": true,
+        "target_offset": [
+            0,
+            350,
+            0,
+            0
+        ],
+        "post_delay": 1000,
         "timeout": 2000
     }
 }

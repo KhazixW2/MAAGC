@@ -39,14 +39,14 @@ class TaskExtractor:
             text = self._get_text(res).strip()
             if not text:
                 continue
-            if text == "接受":
+            if "接受" in text:
                 self.accept_buttons.append(
                     (
                         self._get_box_y(self._get_box_from_result(res)),
                         self._get_box_from_result(res),
                     )
                 )
-            elif text == "放弃":
+            elif "放弃" in text:
                 self.abandon_buttons.append(
                     (
                         self._get_box_y(self._get_box_from_result(res)),
@@ -154,6 +154,17 @@ class TaskExtractor:
             "放弃",
             "当前任务",
             "失败：",
+            "有一",
+            "一名",
+            "一支",
+            "一位",
+            "这个",
+            "委托",
+            "有-",
+            "-300",
+            "x",
+            "X",
+            "×",
         ]
         for pattern in exclude_patterns:
             if pattern in text:
@@ -249,8 +260,8 @@ class TaskExtractor:
             # 提取任务名称（通常是第一个有效的候选）
             if not task_name and self._is_task_name_candidate(text, box_y):
                 task_name = text
-            # 提取任务描述（通常是较长的文本，位于任务名称下方）
-            elif len(text) > 10:
+            # 提取任务描述
+            elif self._is_description(text):
                 task_description += text
             # 提取任务时限
             elif text.startswith("任务时限："):
@@ -302,9 +313,22 @@ class TaskExtractor:
         )
 
     def _is_description(self, text: str) -> bool:
-        """精准匹配描述的开头关键词，避免混入其他文本"""
-        description_starts = ["有一名", "还声称", "一支从", "必须", "委托", "尽快"]
-        return any(text.startswith(pattern) for pattern in description_starts)
+        """判断是否为任务描述"""
+        description_starts = [
+            "有一名",
+            "有一",
+            "一名",
+            "一支",
+            "必须",
+            "委托",
+            "尽快",
+            "一位",
+            "这个",
+        ]
+        for pattern in description_starts:
+            if text.startswith(pattern):
+                return True
+        return len(text) >= 15
 
     def print_task_details(self, tasks: List[TaskInfo]):
         """输出任务详情"""
