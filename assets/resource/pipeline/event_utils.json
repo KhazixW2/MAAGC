@@ -315,7 +315,7 @@
         "post_delay": 500,
         "timeout": 2000,
         "next": [
-            "Event_HarvestFestivalConfirm"
+            "Event_HarvestFestivalWorshipConfirm"
         ]
     },
     "Event_HarvestFestivalWorshipConfirm": {

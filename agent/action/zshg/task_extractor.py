@@ -20,12 +20,22 @@ class TaskExtractor:
     def __init__(self, roi: List[int] = None):
         self.roi = roi or [0, 0, 1920, 1080]
         self.roi_rect = Rect(*self.roi)
-        # 新增：接受按钮缓存（用于后续匹配）
         self.accept_buttons = []
-        # 任务名称存储文件路径
         self.task_names_file = "assets/task_names.json"
-        # 加载已识别的任务名称
         self.known_task_names = self._load_task_names()
+        self.task_blacklist_file = "assets/task_blacklist.txt"
+        self.task_blacklist = self._load_task_blacklist()
+
+    def _load_task_blacklist(self):
+        try:
+            import os
+
+            if os.path.exists(self.task_blacklist_file):
+                with open(self.task_blacklist_file, "r", encoding="utf-8") as f:
+                    return set(line.strip() for line in f if line.strip())
+            return set()
+        except Exception:
+            return set()
 
     def extract_tasks(self, ocr_results: List) -> List[TaskInfo]:
         if not ocr_results:
@@ -68,7 +78,7 @@ class TaskExtractor:
         tasks = []
         for group in task_groups:
             task = self._extract_single_task(group)
-            if task:
+            if task and task.task_name not in self.task_blacklist:
                 tasks.append(task)
 
         return tasks
