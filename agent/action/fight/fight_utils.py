@@ -153,38 +153,53 @@ def _accept_new_task(context: Context) -> bool:
     Returns:
         bool: 接取成功返回 True
     """
-    reco_detail = context.run_recognition(
-        "GetCityTaskDetails",
-        context.tasker.controller.post_screencap().wait().get(),
-        pipeline_override={
-            "GetCityTaskDetails": {
-                "recognition": "OCR",
-                "expected": ["接受"],
-                "roi": [15, 382, 697, 841],
-            }
-        },
-    )
+    max_swipe_times = 3
+    swipe_count = 0
 
-    tasks = []
-    if reco_detail.hit:
-        extractor = TaskExtractor(roi=[15, 382, 697, 841])
-        tasks = extractor.extract_tasks(reco_detail.all_results)
-        extractor.print_task_details(tasks)
+    while swipe_count <= max_swipe_times:
+        reco_detail = context.run_recognition(
+            "GetCityTaskDetails",
+            context.tasker.controller.post_screencap().wait().get(),
+            pipeline_override={
+                "GetCityTaskDetails": {
+                    "recognition": "OCR",
+                    "expected": ["接受"],
+                    "roi": [15, 382, 697, 841],
+                }
+            },
+        )
 
-    if tasks:
-        accept_task = tasks[0]
-        accept_task_rect = accept_task.accept_button_box
-        if accept_task_rect:
-            accept_task_rect_x, accept_task_rect_y = (
-                accept_task_rect.x + accept_task_rect.w // 2,
-                accept_task_rect.y + accept_task_rect.h // 2,
-            )
-            context.tasker.controller.post_click(
-                accept_task_rect_x, accept_task_rect_y
-            ).wait()
-            time.sleep(0.5)
+        tasks = []
+        if reco_detail.hit:
+            extractor = TaskExtractor(roi=[15, 382, 697, 841])
+            tasks = extractor.extract_tasks(reco_detail.all_results)
 
-    return True
+        if tasks:
+            extractor.print_task_details([tasks[0]])
+            accept_task = tasks[0]
+            accept_task_rect = accept_task.accept_button_box
+            if accept_task_rect:
+                accept_task_rect_x, accept_task_rect_y = (
+                    accept_task_rect.x + accept_task_rect.w // 2,
+                    accept_task_rect.y + accept_task_rect.h // 2,
+                )
+                context.tasker.controller.post_click(
+                    accept_task_rect_x, accept_task_rect_y
+                ).wait()
+                time.sleep(0.5)
+            return True
+        else:
+            if swipe_count < max_swipe_times:
+                logger.info(
+                    f"当前页面任务全在黑名单或无任务，正在滑动刷新... ({swipe_count + 1}/{max_swipe_times})"
+                )
+                context.run_task("FindCityTask_SwipeDown")
+                swipe_count += 1
+            else:
+                logger.error("已尝试多次刷新，未检测到可接取的任务")
+                return False
+
+    return False
 
 
 def _process_fight(context: Context) -> bool:

@@ -1,7 +1,14 @@
 {
     "EnterCity": {
         "recognition": "OCR",
-        "expected": "雄月城",
+        "expected": [
+            "王座堡",
+            "圣盾堡",
+            "雄月城",
+            "翠庭",
+            "银风堡",
+            "暮角城"
+        ],
         "roi": [
             58,
             320,
@@ -94,6 +101,25 @@
             821
         ],
         "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000
+    },
+    "FindCityTask_SwipeDown": {
+        "recognition": "DirectHit",
+        "action": "Swipe",
+        "begin": [
+            356,
+            965,
+            10,
+            10
+        ],
+        "end": [
+            359,
+            704,
+            10,
+            10
+        ],
+        "duration": 1000,
         "post_delay": 1000,
         "timeout": 2000
     },
