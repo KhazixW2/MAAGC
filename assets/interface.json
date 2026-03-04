@@ -41,8 +41,12 @@
             "entry": "GameStartUp"
         },
         {
-            "name": "战斗函数测试",
-            "entry": "Map_GetMonthFunc"
+            "name": "推月",
+            "entry": "Auto_FightTask"
+        },
+        {
+            "name": "推年",
+            "entry": "Auto_YearlyTask"
         }
     ]
 }
