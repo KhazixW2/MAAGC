@@ -384,6 +384,8 @@ jobs:
           fi
           if [ -d "install/deps" ]; then
             cp -rpvn install/deps/. install-mxu/deps/
+          else
+            echo "Warning: install/deps directory not found, skipping..."
           fi
 
       - name: Copy MFA files to main version
