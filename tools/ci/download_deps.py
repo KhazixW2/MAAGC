@@ -12,7 +12,7 @@ import argparse
 import platform
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+sys.stdout.reconfigure(encoding="utf-8")
 
 
 def get_platform_tag():

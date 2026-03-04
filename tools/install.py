@@ -1,54 +1,36 @@
 from pathlib import Path
-
 import shutil
 import sys
 import json
 import os
 
+
 script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(script_dir)
 
 from configure import configure_ocr_model
-from generate_manifest_cache import generate_manifest_cache
 
-working_dir = Path(__file__).parent.parent.parent
+working_dir = Path(__file__).parent.parent
 install_path = working_dir / Path("install")
 version = len(sys.argv) > 1 and sys.argv[1] or "v0.0.1"
-platform_tag = len(sys.argv) > 2 and sys.argv[2] or ""
 
 
-def install_deps(platform_tag: str):
-    """安装 MaaFramework 依赖到对应架构路径
-
-    Args:
-        platform_tag: 平台标签，如 win-x64, linux-arm64, osx-arm64
-    """
-    if not platform_tag:
-        raise ValueError("platform_tag is required")
-
+def install_deps():
     shutil.copytree(
         working_dir / "deps" / "bin",
-        install_path / "runtimes" / platform_tag / "native",
+        install_path,
         ignore=shutil.ignore_patterns(
             "*MaaDbgControlUnit*",
             "*MaaThriftControlUnit*",
             "*MaaWin32ControlUnit*",
             "*MaaRpc*",
             "*MaaHttp*",
-            "plugins",
-            "*.node",
-            "*MaaPiCli*",
         ),
         dirs_exist_ok=True,
     )
     shutil.copytree(
         working_dir / "deps" / "share" / "MaaAgentBinary",
-        install_path / "libs" / "MaaAgentBinary",
-        dirs_exist_ok=True,
-    )
-    shutil.copytree(
-        working_dir / "deps" / "bin" / "plugins",
-        install_path / "plugins" / platform_tag,
+        install_path / "MaaAgentBinary",
         dirs_exist_ok=True,
     )
 
@@ -62,6 +44,7 @@ def install_resource():
         install_path / "resource",
         dirs_exist_ok=True,
     )
+
     shutil.copy2(
         working_dir / "assets" / "interface.json",
         install_path,
@@ -71,24 +54,23 @@ def install_resource():
         interface = json.load(f)
 
     interface["version"] = version
-    interface["title"] = f"MaaGC {version} | 亿韭韭韭小助手"
 
     with open(install_path / "interface.json", "w", encoding="utf-8") as f:
         json.dump(interface, f, ensure_ascii=False, indent=4)
 
 
 def install_chores():
-    for file in ["README.md", "LICENSE", "CONTACT", "requirements.txt"]:
+    for file in ["README.md", "LICENSE", "requirements.txt"]:
         shutil.copy2(
             working_dir / file,
             install_path,
         )
-    # shutil.copytree(
-    #     working_dir / "docs",
-    #     install_path / "docs",
-    #     dirs_exist_ok=True,
-    #     ignore=shutil.ignore_patterns("*.yaml"),
-    # )
+    shutil.copytree(
+        working_dir / "docs",
+        install_path / "docs",
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("*.yaml"),
+    )
 
 
 def install_agent():
@@ -102,35 +84,22 @@ def install_agent():
         interface = json.load(f)
 
     if sys.platform.startswith("win"):
-        interface["agent"]["child_exec"] = r"./python/python.exe"
+        interface["agent"]["child_exec"] = r"{PROJECT_DIR}/python/python.exe"
     elif sys.platform.startswith("darwin"):
-        interface["agent"]["child_exec"] = r"./python/bin/python3"
+        interface["agent"]["child_exec"] = r"{PROJECT_DIR}/python/bin/python3"
     elif sys.platform.startswith("linux"):
         interface["agent"]["child_exec"] = r"python3"
 
-    interface["agent"]["child_args"] = ["-u", r"./agent/main.py"]
+    interface["agent"]["child_args"] = ["-u", r"{PROJECT_DIR}/agent/main.py"]
 
     with open(install_path / "interface.json", "w", encoding="utf-8") as f:
         json.dump(interface, f, ensure_ascii=False, indent=4)
 
 
-def install_manifest_cache():
-    """生成初始 manifest 缓存，加速用户首次启动"""
-    config_dir = install_path / "config"
-    success = generate_manifest_cache(config_dir)
-    if success:
-        print("Manifest cache generated successfully.")
-    else:
-        print(
-            "Warning: Manifest cache generation failed, users will do full check on first run."
-        )
-
-
 if __name__ == "__main__":
-    install_deps(platform_tag)
+    install_deps()
     install_resource()
     install_chores()
     install_agent()
-    install_manifest_cache()
 
     print(f"Install to {install_path} successfully.")

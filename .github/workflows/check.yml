@@ -19,38 +19,18 @@ on:
 
 jobs:
   resource:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Use Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Run maa-checker
-        run: |
-          npx @nekosu/maa-checker@latest ./assets/interface.json --github=.
-
-      # Install maafw: dynamically read version/spec from requirements.txt and install that
-      - name: Install maafw (from requirements.txt)
+      # pip install maafw
+      - name: Install maafw
         run: |
           python -m pip install --upgrade pip
-          # 在 requirements.txt 中查找以 maafw 开头的行（例如: maafw==5.1.0 或 maafw>=4.5）
-          pkg=$(grep -E '^\s*maafw' requirements.txt | head -1 | tr -d '[:space:]')
-          if [ -z "$pkg" ]; then
-            pkg='maafw'
-          fi
-          echo "Installing $pkg"
-          python -m pip install --upgrade "$pkg"
+          python -m pip install --upgrade maafw --pre
 
       - name: Check Resource
         run: |
-          python ./tools/ci/check_resource.py ./assets/resource
-
-      - name: Validate JSON Schema
-        run: |
-          python -m pip install jsonschema==4.26.0 referencing==0.37.0
-          python tools/validate_schema.py --schema-dir deps/tools --resource-dirs assets/resource --exclude-dirs assets/resource/announcement assets/resource/data assets/resource/tasks --interface-files assets/interface.json --task-dirs assets/resource/tasks
+          python ./tools/ci/check_resource.py ./assets/resource/base

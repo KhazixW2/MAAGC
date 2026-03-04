@@ -8,7 +8,7 @@ import zipfile
 import tarfile
 import stat  # 用于在 macOS/Linux 上设置文件权限
 
-sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+sys.stdout.reconfigure(encoding="utf-8")
 print(os.getcwd())
 # --- 配置 ---
 # 可以根据需要修改这些值
@@ -86,10 +86,24 @@ def get_python_executable_path(base_dir, os_type):
 
 
 def ensure_pip(python_executable, python_install_dir):
-    """安装 pip"""
+    """检查并安装 pip"""
     if not python_executable or not os.path.exists(python_executable):
         print("错误: Python 可执行文件未找到，无法安装 pip。")
         return False
+
+    print(f"检查 pip 是否已随 {python_executable} 安装...")
+    try:
+        result = subprocess.run(
+            [python_executable, "-m", "pip", "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding="utf-8",
+        )
+        print(f"pip 已安装: {result.stdout.strip()}")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("pip 未找到或 'python -m pip' 执行失败。尝试安装 pip。")
 
     get_pip_url = "https://bootstrap.pypa.io/get-pip.py"
     # 将 get-pip.py 下载到 Python 安装目录下，执行后再删除
@@ -108,7 +122,7 @@ def ensure_pip(python_executable, python_install_dir):
         subprocess.run([python_executable, get_pip_script_path], check=True)
         print("pip 安装成功。")
         return True
-    except (subprocess.CalledProcessError, OSError) as e:
+    except subprocess.CalledProcessError as e:
         print(f"pip 安装失败: {e}")
         return False
     finally:
@@ -119,7 +133,9 @@ def ensure_pip(python_executable, python_install_dir):
 # --- 主逻辑 ---
 def main():
     os_type = platform.system()
-    os_arch = platform.machine()
+    os_arch = (
+        platform.machine()
+    )  # 例如: 'AMD64'(Win), 'x86_64'(macOS Intel), 'arm64'(macOS Apple Silicon)
 
     print(f"操作系统: {os_type}, 架构: {os_arch}")
     print(f"目标 Python 版本: {PYTHON_VERSION_TARGET}")
@@ -149,30 +165,7 @@ def main():
     python_executable_final_path = None
 
     if os_type == "Windows":
-        # 在Windows ARM64环境中，platform.machine()可能错误返回AMD64
-        # 我们需要检查处理器标识符来确定真实架构
-        processor_identifier = os.environ.get("PROCESSOR_IDENTIFIER", "")
-
-        # 检查是否为ARM64处理器
-        if "ARMv8" in processor_identifier or "ARM64" in processor_identifier:
-            print(f"检测到ARM64处理器: {processor_identifier}")
-            os_arch = "ARM64"
-
-        # 映射platform.machine()到Python官网的命名
-        arch_mapping = {
-            "AMD64": "amd64",
-            "x86_64": "amd64",
-            "ARM64": "arm64",
-            "aarch64": "arm64",
-        }
-        win_arch_suffix = arch_mapping.get(os_arch, os_arch.lower())
-
-        if win_arch_suffix not in ["amd64", "arm64"]:
-            print(f"错误: 不支持的Windows架构: {os_arch} -> {win_arch_suffix}")
-            return
-
-        print(f"使用Windows架构: {os_arch} -> {win_arch_suffix}")
-
+        win_arch_suffix = "amd64" if os_arch == "AMD64" else "win32"
         download_url = f"https://www.python.org/ftp/python/{PYTHON_VERSION_TARGET}/python-{PYTHON_VERSION_TARGET}-embed-{win_arch_suffix}.zip"
         zip_filename = f"python-{PYTHON_VERSION_TARGET}-embed-{win_arch_suffix}.zip"
         zip_filepath = os.path.join(DEST_DIR, zip_filename)  # 下载到目标目录内再解压
@@ -232,12 +225,13 @@ def main():
         python_executable_final_path = get_python_executable_path(DEST_DIR, os_type)
 
     elif os_type == "Darwin":  # macOS
-        # 映射platform.machine()到python-build-standalone的架构名称
-        arch_mapping = {"x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}
-        pbs_arch = arch_mapping.get(os_arch, os_arch)
-
-        if pbs_arch not in ["x86_64", "aarch64"]:
-            print(f"错误: 不支持的 macOS 架构: {os_arch} -> {pbs_arch}")
+        # 映射到 python-build-standalone 使用的架构名称
+        if os_arch == "arm64":  # Apple Silicon
+            pbs_arch = "aarch64"
+        elif os_arch == "x86_64":  # Intel Mac
+            pbs_arch = "x86_64"
+        else:
+            print(f"错误: 不支持的 macOS 架构: {os_arch}")
             return
 
         # 文件名格式: cpython-{PYTHON_VERSION}+{RELEASE_TAG_DATE}-{ARCH}-apple-darwin-install_only.tar.gz
