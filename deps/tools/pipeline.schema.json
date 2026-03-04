@@ -37,7 +37,7 @@
         },
         "jsonDocument": {
             "patternProperties": {
-                ".*_doc$|^doc$": {
+                ".*_doc$|^doc$|.*_desc$|^desc$": {
                     "title": "Document Property",
                     "description": "文档 | 该节点属性的文档说明。",
                     "type": "string",
@@ -306,6 +306,23 @@
                 }
             ],
             "default": []
+        },
+        "jsonStringOrListOrMap": {
+            "anyOf": [
+                {
+                    "type": "string"
+                },
+                {
+                    "$ref": "#/$defs/jsonStringList"
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            ],
+            "default": {}
         },
         "NodeAttr": {
             "type": "object",
@@ -1042,6 +1059,12 @@
                     "description": "模型 **文件夹** 路径。使用 `model/ocr` 文件夹的相对路径。可选，默认为空。",
                     "type": "string",
                     "markdownDescription": "*string*\n\n模型 **文件夹** 路径。使用 `model/ocr` 文件夹的相对路径。可选，默认为空。\n\n若为空，则为 `model/ocr` 根目录下的模型文件。\n\n文件夹中需要包含 `rec.onnx`, `det.onnx`, `keys.txt` 三个文件。"
+                },
+                "color_filter": {
+                    "title": "Color Filter Property",
+                    "description": "颜色过滤。填写某个 ColorMatch 节点名，先使用该节点的颜色参数对图像进行二值化，再送入 OCR 识别。可选，默认为空。",
+                    "type": "string",
+                    "markdownDescription": "*string*\n\n颜色过滤。填写某个 `ColorMatch` 节点名，先使用该节点的颜色参数（`method`、`lower`、`upper`）对图像进行二值化，再送入 OCR 识别。可选，默认为空。\n\n仅使用该节点的颜色二值化逻辑，不依赖其 `count`、`order_by` 等结果参数。\n\n设置了该字段的 OCR 节点不参与 batch 优化。"
                 }
             }
         },
@@ -1278,7 +1301,7 @@
                 }
             }
         },
-        "SubRecognition": {
+        "SubRecognitionInline": {
             "type": "object",
             "properties": {
                 "sub_name": {
@@ -1289,17 +1312,28 @@
                 }
             }
         },
+        "SubRecognition": {
+            "anyOf": [
+                {
+                    "type": "string",
+                    "description": "节点名称引用。运行时使用该节点的识别算法和参数。"
+                },
+                {
+                    "$ref": "#/$defs/SubRecognitionInline"
+                }
+            ]
+        },
         "And": {
             "type": "object",
             "properties": {
                 "all_of": {
                     "title": "All Of Property",
-                    "description": "子识别列表。所有子识别都命中才算成功。必选。",
+                    "description": "子识别列表。所有子识别都命中才算成功。必选。支持节点名称引用或内联定义。",
                     "type": "array",
                     "items": {
                         "$ref": "#/$defs/SubRecognition"
                     },
-                    "markdownDescription": "*list<object, >*\n\n子识别列表。所有子识别都命中才算成功。必选。\n\n列表元素写法与普通节点的 `recognition` 一致（兼容 v1/v2，允许混用）。"
+                    "markdownDescription": "*list<string | object, >*\n\n子识别列表。所有子识别都命中才算成功。必选。\n\n列表元素可以是：\n- 字符串：节点名称引用，运行时使用该节点的识别算法和参数\n- 对象：内联识别定义，写法与普通节点的 `recognition` 一致（兼容 v1/v2，允许混用）"
                 },
                 "box_index": {
                     "title": "Box Index Property",
@@ -1352,12 +1386,12 @@
             "properties": {
                 "any_of": {
                     "title": "Any Of Property",
-                    "description": "子识别列表。命中第一个即成功，后续不再识别。必选。",
+                    "description": "子识别列表。命中第一个即成功，后续不再识别。必选。支持节点名称引用或内联定义。",
                     "type": "array",
                     "items": {
                         "$ref": "#/$defs/SubRecognition"
                     },
-                    "markdownDescription": "*list<object, >*\n\n子识别列表。命中第一个即成功，后续不再识别。必选。\n\n列表元素写法与普通节点的 `recognition` 一致（兼容 v1/v2，允许混用）。"
+                    "markdownDescription": "*list<string | object, >*\n\n子识别列表。命中第一个即成功，后续不再识别。必选。\n\n列表元素可以是：\n- 字符串：节点名称引用，运行时使用该节点的识别算法和参数\n- 对象：内联识别定义，写法与普通节点的 `recognition` 一致（兼容 v1/v2，允许混用）"
                 }
             },
             "required": [
@@ -3091,8 +3125,8 @@
                     "type": "string",
                     "markdownDescription": "*string*\n\n要执行的 shell 命令。必选。\n\n例如 `getprop ro.build.version.sdk` 或 `settings put global animator_duration_scale 0`。\n\n> 注意：此动作仅对 ADB 控制器有效。"
                 },
-                "timeout": {
-                    "title": "Timeout Property",
+                "shell_timeout": {
+                    "title": "Shell Timeout Property",
                     "description": "超时时间（毫秒）。可选，默认 20000 (20秒)。设置为 -1 表示无限等待。",
                     "type": "integer",
                     "default": 20000,
@@ -3135,6 +3169,64 @@
             "dependentSchemas": {
                 "type": {
                     "$ref": "#/$defs/TypeWithDependent"
+                }
+            }
+        },
+        "Screencap": {
+            "type": "object",
+            "properties": {
+                "filename": {
+                    "title": "Filename Property",
+                    "description": "保存截图的文件名（不含扩展名）。可选，默认使用 \"时间戳_节点名\" 格式。",
+                    "type": "string",
+                    "markdownDescription": "*string*\n\n保存截图的文件名（不含扩展名）。可选，默认使用 `时间戳_节点名` 格式。\n\n截图保存在 `log_dir/screencap/` 目录下。"
+                },
+                "format": {
+                    "title": "Format Property",
+                    "description": "图片格式。可选，默认 \"png\"。",
+                    "type": "string",
+                    "enum": ["png", "jpg", "jpeg"],
+                    "default": "png",
+                    "markdownDescription": "*string*\n\n图片格式。可选，默认 `\"png\"`（无损）。\n\n可选值：`\"png\"` | `\"jpg\"` | `\"jpeg\"`"
+                },
+                "quality": {
+                    "title": "Quality Property",
+                    "description": "图片质量，仅对 jpg/jpeg 有效。可选，默认 100。",
+                    "type": "integer",
+                    "default": 100,
+                    "minimum": 0,
+                    "maximum": 100,
+                    "markdownDescription": "*int*\n\n图片质量（0-100），仅对 `jpg` / `jpeg` 格式有效。可选，默认 100。\n\n`png` 格式始终为无损压缩，此字段无效。"
+                }
+            }
+        },
+        "ScreencapV1": {
+            "properties": {
+                "action": {
+                    "const": "Screencap"
+                }
+            },
+            "allOf": [
+                {
+                    "$ref": "#/$defs/Screencap"
+                }
+            ]
+        },
+        "ScreencapV2": {
+            "properties": {
+                "type": {
+                    "const": "Screencap"
+                },
+                "param": {
+                    "unevaluatedProperties": false,
+                    "allOf": [
+                        {
+                            "$ref": "#/$defs/Screencap"
+                        },
+                        {
+                            "$ref": "#/$defs/jsonComments"
+                        }
+                    ]
                 }
             }
         },
@@ -3273,6 +3365,7 @@
                 "StopTask",
                 "Command",
                 "Shell",
+                "Screencap",
                 "Custom"
             ]
         },
@@ -3714,6 +3807,17 @@
                     }
                 },
                 {
+                    "label": "ScreencapV1",
+                    "body": "^ \"Screencap\""
+                },
+                {
+                    "label": "ScreencapV2",
+                    "body": {
+                        "type": "Screencap",
+                        "param": {}
+                    }
+                },
+                {
                     "label": "CustomActionV1",
                     "body": "^ \"Custom\",\n\"custom_action\": \"\""
                 },
@@ -3794,6 +3898,9 @@
                 },
                 {
                     "$ref": "#/$defs/ShellV1"
+                },
+                {
+                    "$ref": "#/$defs/ScreencapV1"
                 },
                 {
                     "$ref": "#/$defs/CustomActionV1"
@@ -3878,6 +3985,9 @@
                         },
                         {
                             "$ref": "#/$defs/ShellV2"
+                        },
+                        {
+                            "$ref": "#/$defs/ScreencapV2"
                         },
                         {
                             "$ref": "#/$defs/CustomActionV2"
@@ -4084,8 +4194,8 @@
                 "anchor": {
                     "title": "Anchor Property",
                     "description": "锚点名称。可选，默认空。",
-                    "$ref": "#/$defs/jsonStringOrList",
-                    "markdownDescription": "*string* | *list<string, >*\n\n锚点名称。可选，默认空。\n\n当节点执行成功后，会将该锚点名设置为当前节点。多个节点可设置同一个锚点名，后执行的会覆盖先执行的。\n\n在 `next` 或 `on_error` 中可通过 `[Anchor]` 属性引用该锚点，运行时会解析为最后设置该锚点的节点。\n\n详见文档中的「节点属性」章节。"
+                    "$ref": "#/$defs/jsonStringOrListOrMap",
+                    "markdownDescription": "*string* | *list<string, >* | *object*\n\n锚点名称。可选，默认空。\n\n当节点执行成功后，会将该锚点名设置为对应的节点。多个节点可设置同一个锚点名，后执行的会覆盖先执行的。\n\n支持三种格式：\n- 字符串：`\"anchor\": \"MyAnchor\"` - 将锚点设置为当前节点\n- 字符串数组：`\"anchor\": [\"A\", \"B\"]` - 将多个锚点都设置为当前节点\n- 对象：`\"anchor\": {\"A\": \"TargetNode\", \"B\": \"\"}` - 将锚点 A 设置为 TargetNode，清除锚点 B（空字符串表示清除该锚点）\n\n在 `next` 或 `on_error` 中可通过 `[Anchor]` 属性引用该锚点，运行时会解析为最后设置该锚点的节点。\n\n详见文档中的「节点属性」章节。"
                 },
                 "inverse": {
                     "title": "Inverse Property",

@@ -4,15 +4,16 @@
     "description": "这是一个使用 MaaFramework 创建的新项目。",
     "contact": "QQ群: 123456789",
     "license": "MIT",
-    "welcome": "首次使用！欢迎使用 MAA!",
+    "welcome": "首次使用！欢迎使用 MaaGC!",
     "github": "https://github.com/MaaXYZ/MAAGC",
     "version": "1.0.0",
     "mirrorchyan_rid": "MaaGC",
     "mirrorchyan_multiplatform": false,
     "controller": [
         {
-            "name": "安卓端",
+            "name": "ADB",
             "type": "Adb",
+            "label": "模拟器",
             "display_short_side": 720
         }
     ],
@@ -21,11 +22,14 @@
             "name": "官服",
             "path": [
                 "./resource"
+            ],
+            "controller": [
+                "ADB"
             ]
         }
     ],
     "agent": {
-        "child_exec": "python",
+        "child_exec": "./python/python.exe",
         "child_args": [
             "-u",
             "./agent/main.py"

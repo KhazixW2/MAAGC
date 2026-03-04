@@ -1,8 +1,7 @@
 [remote.github]
-owner = "MaaXYZ"
-repo = "MaaPracticeBoilerplate"
-#自用时换成自己的仓库owner和repo
-#注意，本地git user需与github一致才能实现成功@
+owner = "KhazixW2"
+repo = "MAAGC"
+
 [changelog]
 # 标题
 header = """
@@ -18,7 +17,7 @@ body = """
     - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
         {% if commit.breaking %}[**breaking**] {% endif %}\
         {{ commit.message | split(pat="\n") | first | upper_first }} \
-        @{{ commit.author.name }}
+        {% if commit.github.username %} @{{ commit.github.username }}{% else %} {{ commit.author.name }}{% endif %}
         {%- if commit.footers -%}
             {%- for footer in commit.footers -%}
                 {%- if footer.token == "Co-authored-by" -%}
@@ -62,6 +61,28 @@ body = """
 
 # 尾部
 footer = """
+{%- macro remote_url() -%}
+  https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}
+{%- endmacro -%}
+
+{%- set latest_version = "" -%}
+{%- for release in releases -%}
+  {%- if release.version and latest_version == "" -%}
+    {%- set_global latest_version = release.version -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{% if latest_version -%}
+**绝大部分用户请下载 [maagc-win-x86_64-{{ latest_version }}-MXU.zip]({{ self::remote_url() }}/releases/download/{{ latest_version }}/maagc-win-x86_64-{{ latest_version }}-MXU.zip) 或 [maagc-win-x86_64-{{ latest_version }}-MFAA.zip]({{ self::remote_url() }}/releases/download/{{ latest_version }}/maagc-win-x86_64-{{ latest_version }}-MFAA.zip)**
+{%- else -%}
+**绝大部分用户请下载 maagc-win-x86_64-vx.x.x-MXU.zip 或 maagc-win-x86_64-vx.x.x-MFAA.zip，没找到的请点 show all x assets**
+{%- endif %}
+
+> MXU = 图形界面版 | MFAA = 图形界面版 | PiCLI = 命令行版
+
+[已有 Mirror酱 CDK？点击前往高速下载](https://mirrorchyan.com/zh/projects?rid=maagc&source=maagcgh-release)
+
+<!--软件本体完全免费，认准唯一官网，若您有付费购买请立即退款并举报！-->
 """
 
 [git]
@@ -73,6 +94,9 @@ split_commits = false
 # 保留完整的 commit body
 protect_breaking_commits = false
 commit_parsers = [
+    # 跳过包含 [skip changelog] 的 commit
+    { message = ".*\\[skip changelog\\].*", skip = true },
+    { body = ".*\\[skip changelog\\].*", skip = true },
     { message = "^feat", group = "<!-- 0 -->✨ 新功能" },
     { message = "^fix", group = "<!-- 1 -->🐛 Bug修复" },
     { message = "^docs", group = "<!-- 4 -->📚 文档" },
@@ -84,7 +108,7 @@ commit_parsers = [
     { message = "^chore", group = "<!-- 8 -->🔧 日常维护" },
     { message = "^ci", group = "<!-- 7 -->⚙️ 持续集成" },
     { body = ".*security", group = "<!-- 9 -->🔒 安全" },
-    { message = "^revert", group = "<!-- 10 -->◀️ 撤销" },
+    { message = "^[Rr]evert", group = "<!-- 10 -->◀️ 撤销" },
 ]
 
 # 忽略这些提交
