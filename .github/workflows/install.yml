@@ -189,13 +189,11 @@ jobs:
         run: |
           PLATFORM_TAG="win-${{ steps.platform.outputs.tag }}"
           ./install/python/python.exe ./tools/ci/install.py ${{ needs.meta.outputs.tag }} $PLATFORM_TAG
-          cp -rpvn tools/registry/. install/
 
       - name: Create CLI version
         shell: bash
         run: |
           ./install/python/python.exe ./tools/ci/install_cli.py ${{ needs.meta.outputs.tag }}
-          cp -rpvn tools/registry/. install-cli/
           cp -rpvn install/python/. install-cli/python/
           rm -rf install-cli/deps 2>/dev/null || true
 
@@ -203,7 +201,6 @@ jobs:
         shell: bash
         run: |
           ./install/python/python.exe ./tools/ci/install_mxu.py ${{ needs.meta.outputs.tag }}
-          cp -rpvn tools/registry/. install-mxu/
           cp -rpvn install/python/. install-mxu/python/
           if [ -d "install/deps" ]; then
             cp -rpvn install/deps/. install-mxu/deps/
