@@ -204,14 +204,10 @@ jobs:
         shell: bash
         run: |
           ./install/python/python.exe ./tools/ci/install_mxu.py ${{ needs.meta.outputs.tag }}
-          mkdir -p install-mxu
+          # Copy embedded Python if exists
           if [ -d "install/python" ]; then
             mkdir -p install-mxu/python
             cp -rpvn install/python/. install-mxu/python/
-          fi
-          if [ -d "install/deps" ]; then
-            mkdir -p install-mxu/deps
-            cp -rpvn install/deps/. install-mxu/deps/
           fi
 
       - name: Copy MFA files to main version
@@ -387,13 +383,10 @@ jobs:
         run: |
           PYTHON_EXECUTABLE="python"
           $PYTHON_EXECUTABLE ./tools/ci/install_mxu.py ${{ needs.meta.outputs.tag }}
-          mkdir -p install-mxu
           if [ -d "install/python" ]; then
-            mkdir -p install-mxu/python
             cp -rpvn install/python/. install-mxu/python/
           fi
           if [ -d "install/deps" ]; then
-            mkdir -p install-mxu/deps
             cp -rpvn install/deps/. install-mxu/deps/
           fi
 
@@ -583,13 +576,8 @@ jobs:
         run: |
           PYTHON_EXECUTABLE="./install/python/bin/python3"
           $PYTHON_EXECUTABLE ./tools/ci/install_mxu.py ${{ needs.meta.outputs.tag }}
-          mkdir -p install-mxu
-          if [ -d "install/python" ]; then
-            mkdir -p install-mxu/python
-            cp -rpvn install/python/. install-mxu/python/
-          fi
+          cp -rpvn install/python/. install-mxu/python/
           if [ -d "install/deps" ]; then
-            mkdir -p install-mxu/deps
             cp -rpvn install/deps/. install-mxu/deps/
           fi
 
@@ -737,11 +725,3 @@ jobs:
           body: ${{ needs.changelog.outputs.release_body }}
           draft: false
           prerelease: ${{ needs.meta.outputs.is_prerelease == 'true' }}
-
-      - name: Trigger MirrorChyanUploading
-        shell: bash
-        run: |
-          gh workflow run --repo $GITHUB_REPOSITORY mirrorchyan.yml -f tag=${{ needs.meta.outputs.tag }}
-          gh workflow run --repo $GITHUB_REPOSITORY mirrorchyan_release_note.yml -f tag=${{ needs.meta.outputs.tag }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
