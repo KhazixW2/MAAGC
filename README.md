@@ -5,113 +5,208 @@
 
 <div align="center">
 
-# MaaPracticeBoilerplate
+# MaaGC
+
+**MaaGC** 是一款基于 [MaaFramework](https://github.com/MaaXYZ/MaaFramework) 开发的自动化助手工具。
+
+[![GitHub release](https://img.shields.io/github/v/release/KhazixW2/MAAGC)](https://github.com/KhazixW2/MAAGC/releases)
+[![GitHub stars](https://img.shields.io/github/stars/KhazixW2/MAAGC)](https://github.com/KhazixW2/MAAGC/stargazers)
+[![GitHub license](https://img.shields.io/github/license/KhazixW2/MAAGC)](https://github.com/KhazixW2/MAAGC/blob/main/LICENSE)
+[![MaaFramework](https://img.shields.io/badge/powered%20by-MaaFramework-blue)](https://github.com/MaaXYZ/MaaFramework)
 
 </div>
 
-本仓库为 [MaaFramework](https://github.com/MaaXYZ/MaaFramework) 所提供的项目模板，开发者可基于此模板直接创建自己的 MaaXXX 项目。
+## 📋 功能列表
 
-> **MaaFramework** 是基于图像识别技术、运用 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights) 开发经验去芜存菁、完全重写的新一代自动化黑盒测试框架。
-> 低代码的同时仍拥有高扩展性，旨在打造一款丰富、领先、且实用的开源库，助力开发者轻松编写出更好的黑盒测试程序，并推广普及。
+- **启动/关闭游戏** - 自动化启动和关闭游戏客户端
+- **推月** - 每月例行任务自动化处理
+- **推年** - 每年例行任务自动化处理
 
-## 即刻开始
+更多功能正在开发中...
 
-- [📄 快速开始](https://github.com/MaaXYZ/MaaFramework/blob/main/docs/zh_cn/1.1-%E5%BF%AB%E9%80%9F%E5%BC%80%E5%A7%8B.md)
-- [🎞️ 视频教程](https://www.bilibili.com/video/BV1yr421E7MW)
+## 🚀 快速开始
 
-## 如何开发
+### 下载方式
 
-0. 使用右上角 `Use this template` - `Create a new repository` 来基于本模板创建您自己的项目。
+#### 方式一：GitHub Releases（推荐）
 
-1. 克隆本项目（地址请修改为您基于本模板创建的新项目地址）。
+前往 [Releases 页面](https://github.com/KhazixW2/MAAGC/releases) 下载最新版本：
 
-    ```bash
-    git clone https://github.com/MaaXYZ/MaaPracticeBoilerplate.git
-    ```
+- **MFAA 版本** - 基于 Avalonia UI 的图形界面版本，适合普通用户
+- **MXU 版本** - 基于 Tauri + React 的现代化界面版本
+- **PiCLI 版本** - 命令行版本，适合高级用户
 
-2. 下载 MaaFramework 的 [Release 包](https://github.com/MaaXYZ/MaaFramework/releases)，解压到 `deps` 文件夹中。
+#### 方式二：Mirror 酱高速下载
 
-3. 下载 OCR（文字识别）资源文件 [ppocr_v5.zip](https://download.maafw.xyz/MaaCommonAssets/OCR/ppocr_v5/ppocr_v5-zh_cn.zip) 解压到 `assets/resource/model/ocr/` 目录下，确保路径如下：
+使用 Mirror 酱可以快速下载和自动更新 MaaGC。
 
-    ```tree
-    assets/resource/model/ocr/
-    ├── det.onnx
-    ├── keys.txt
-    └── rec.onnx
-    ```
+### 使用说明
 
-    _请注意，您不需要将 OCR 资源文件上传到您的代码仓库中。`.gitignore` 已经忽略了 `assets/resource/model/ocr/` 目录，且 GitHub workflow 在发布版本时会自动配置这些资源文件。_
+#### 1. 连接配置
 
-4. 进行开发工作，按您的业务需求修改 `assets` 中的资源文件，请参考 [MaaFramework 相关文档](https://github.com/MaaXYZ/MaaFramework/blob/main/docs/zh_cn/1.1-%E5%BF%AB%E9%80%9F%E5%BC%80%E5%A7%8B.md#%E8%B5%84%E6%BA%90%E5%87%86%E5%A4%87)。
+**模拟器连接**：
+- 支持主流安卓模拟器（雷电、夜神、MuMu 等）
+- 确保模拟器已开启 ADB 调试模式
+- 分辨率建议设置为 1280x720 或更高
 
-5. 完成开发后，上传您的代码并发布版本。
+**PC 端连接**：
+- 支持 Windows 平台 PC 端游戏
+- 需要游戏窗口处于前台运行状态
 
-    ```bash
-    # 配置 git 信息（仅第一次需要，后续不用再配置）
-    git config user.name "您的 GitHub 昵称"
-    git config user.email "您的 GitHub 邮箱"
-    
-    # 提交修改
-    git add .
-    git commit -m "XX 新功能"
-    git push origin HEAD -u
-    ```
+#### 2. 首次使用
 
-6. 发布您的版本
+1. 下载并解压对应版本到任意目录
+2. 运行 `maagc.exe`（MFAA/MXU 版本）或 `MaaPiCli.exe`（PiCLI 版本）
+3. 按照引导完成连接配置
+4. 选择需要执行的任务，点击开始
 
-    需要**先**修改仓库设置 `Settings` - `Actions` - `General` - `Read and write permissions` - `Save`
+#### 3. 详细文档
 
-    ```bash
-    # CI 检测到 tag 会自动进行发版
-    git tag v1.0.0
-    git push origin v1.0.0
-    ```
+- [新手上路](./docs/zh_cn/新手上路.md) - 使用前必看，快速配置和启动
+- [功能介绍](./docs/zh_cn/功能介绍.md) - 详细的功能说明和使用技巧
+- [连接设置](./docs/zh_cn/连接设置.md) - 模拟器、PC 端连接配置
+- [常见问题](./docs/zh_cn/常见问题.md) - 遇到问题先看这里
+- [MaaPiCli 使用说明](./docs/zh_cn/MaaPiCli 使用说明.md) - 命令行版使用指南
 
-7. 更多操作，请参考 [个性化配置](./docs/zh_cn/个性化配置.md)（可选）
+## 💻 版本说明
 
-## 生态共建
+### MFAA 版本
+- 基于 Avalonia UI 构建的跨平台图形界面
+- 提供直观的任务配置和操作界面
+- 适合大多数普通用户使用
 
-MAA 正计划建设为一类项目，而非舟的单一软件。
+### MXU 版本
+- 基于 Tauri + React + TypeScript 构建的现代化界面
+- 更流畅的用户体验和更美观的界面设计
+- 推荐使用此版本获得最佳体验
 
-若您的项目依赖于 MaaFramework，我们欢迎您将它命名为 MaaXXX, MXA, MAX 等等。当然，这是许可而不是限制，您也可以自由选择其他与 MAA 无关的名字，完全取决于您自己的想法！
+### PiCLI 版本
+- 命令行版本，无图形界面
+- 适合服务器环境或高级用户
+- 资源占用最低
 
-同时，我们也非常欢迎您提出 PR，在 [社区项目列表](https://github.com/MaaXYZ/MaaFramework#%E7%A4%BE%E5%8C%BA%E9%A1%B9%E7%9B%AE) 中添加上您的项目！
+## 🛠️ 开发相关
 
-## FAQ
+### 环境要求
 
-### 0. 我是第一次使用 git，这是什么？视频演示中那个黑框框命令行哪来的？
+- Python 3.8+
+- Git
+- MaaFramework
 
-黑框框是 git bash，几乎任何现代软件的开发都离不开 git，建议先参考 [菜鸟教程](https://www.runoob.com/git/git-install-setup.html) 或搜索一些视频，学习完 git 后再来进行后续开发工作。
+### 本地开发
 
-### 1. 我是第一次使用 Python，在命令行输入 `python ./configure.py` 或 `python -m pip install MaaFW` 之后没有反应？没有报错，也没有提示成功，什么都没有
+1. **克隆项目**
+   ```bash
+   git clone https://github.com/KhazixW2/MAAGC.git
+   cd MAAGC
+   ```
 
-Win10 或者 Win11 系统自带了一份 "Python"，但它其实只是一个安装器，是没法用的。  
-你需要做的是关闭它或者删除它的环境变量，然后自己去 Python 官网下载并安装一份 Python。  
-[参考方法](https://www.bilibili.com/read/cv24692025/)
+2. **初始化子模块**
+   ```bash
+   git submodule update --init --recursive
+   ```
 
-### 2. 使用 MaaDebugger 或 MaaPicli 时弹窗报错，应用程序错误：应用程序无法正常启动
+3. **下载依赖**
+   - 下载 [MaaFramework](https://github.com/MaaXYZ/MaaFramework/releases) 到 `deps` 目录
+   - 下载 OCR 资源文件到 `assets/resource/model/ocr/` 目录
 
-![缺少运行库](https://github.com/user-attachments/assets/942df84b-f47d-4bb5-98b5-ab5d44bc7c2a)
+4. **运行测试**
+   ```bash
+   python agent/main.py
+   ```
 
-一般是电脑缺少某些运行库，请安装一下 [vc_redist](https://aka.ms/vs/17/release/vc_redist.x64.exe) 。
+### 项目结构
 
-### 3. 我在这个仓库里提了 Issue 很久没人回复
+```
+MAAGC/
+├── agent/              # Python 代理脚本
+├── assets/             # 资源文件
+│   ├── resource/       # 识别资源、任务配置
+│   ├── config/         # 配置文件
+│   └── interface.json  # 接口定义
+├── tools/              # 工具脚本
+└── docs/               # 文档
+```
 
-这里是《项目模板》仓库，它仅仅是一个模板，一般很少会修改，开发者也较少关注。  
-在此仓库请仅提问模板相关问题，其他问题最好前往对应的仓库提出，如果有 log，最好也带上它（`debug/maa.log` 文件）
+### 贡献指南
 
-- MaaFW 本身及 MaaPiCli 的问题：[MaaFramework/issues](https://github.com/MaaXYZ/MaaFramework/issues)
-- MaaDebugger 的问题：[MaaDebugger/issues](https://github.com/MaaXYZ/MaaDebugger/issues)
-- 不知道算是哪里的、其他疑问等：[讨论区](https://github.com/MaaXYZ/MaaFramework/discussions)
+我们欢迎各种形式的贡献：
 
-### 4. OCR 文字识别一直没有识别结果，报错 "Failed to load det or rec", "ocrer_ is null"
+- 🐛 报告 Bug
+- 💡 提出新功能建议
+- 📝 改进文档
+- 🔧 提交代码修复或新功能
 
-**请仔细阅读文档**，你无视了前面步骤的报错。我不想解释了，请再把本文档仔细阅读一遍！
+请查看 [开发文档](./docs/zh_cn/开发指南.md) 了解更多详情。
 
-## 鸣谢
+## ❓ 常见问题
 
-本项目由 **[MaaFramework](https://github.com/MaaXYZ/MaaFramework)** 强力驱动！
+### 0. 运行时报错"应用程序无法正常启动"？
 
-感谢以下开发者对本项目作出的贡献（下面链接改成你自己的项目地址）:
+通常是缺少 Visual C++ 运行库，请安装 [vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe)。
 
-[![Contributors](https://contrib.rocks/image?repo=MaaXYZ/MaaFramework&max=1000)](https://github.com/MaaXYZ/MaaFramework/graphs/contributors)
+### 1. OCR 识别失败，报错"Failed to load det or rec"？
+
+请确保已正确下载 OCR 资源文件到 `assets/resource/model/ocr/` 目录，需要包含：
+- `det.onnx`
+- `rec.onnx`
+- `keys.txt`
+
+### 2. 无法连接到游戏？
+
+- 检查模拟器是否已开启 ADB 调试
+- 确认 ADB 端口配置正确（默认 5555）
+- 尝试重启模拟器或重新连接
+
+### 3. 任务执行异常？
+
+- 检查游戏分辨率是否符合要求（建议 1280x720）
+- 确保游戏窗口处于前台（PC 端）
+- 查看日志文件 `debug/maa.log` 获取详细错误信息
+
+更多问题请查看 [常见问题文档](./docs/zh_cn/常见问题.md) 或在 Issues 中提问。
+
+## 📜 用户许可协议
+
+使用本软件即表示您同意以下条款：
+
+- 本软件按"现状"提供，不提供任何明示或暗示的保证
+- 用户承诺已阅读并同意第三方应用（游戏）的用户协议
+- 用户保证仅将本软件用于合法的测试目的
+- 开发者不对用户使用本软件造成的任何损失承担责任
+
+详细条款请查看 [用户许可协议](./assets/description.md)。
+
+## 🙏 鸣谢
+
+### 核心框架
+
+- **[MaaFramework](https://github.com/MaaXYZ/MaaFramework)** - 基于图像识别的自动化黑盒测试框架
+
+### UI 支持
+
+- **[MFAAvalonia](https://github.com/MaaXYZ/MFAAvalonia)** - 基于 Avalonia UI 构建的通用 GUI 解决方案
+- **[MXU](https://github.com/MistEO/MXU)** - 基于 Tauri + React + TypeScript 构建的现代化 GUI 客户端
+
+### 感谢所有贡献者
+
+[![Contributors](https://contrib.rocks/image?repo=KhazixW2/MAAGC&max=1000)](https://github.com/KhazixW2/MAAGC/graphs/contributors)
+
+## 📞 联系我们
+
+- **GitHub Issues**: [问题反馈](https://github.com/KhazixW2/MAAGC/issues)
+- **讨论区**: [GitHub Discussions](https://github.com/KhazixW2/MAAGC/discussions)
+
+## 📄 许可证
+
+本项目采用 [MIT 许可证](LICENSE) 开源。
+
+---
+
+<div align="center">
+
+**MaaGC** | 让自动化变得更简单
+
+Made with ❤️ by MaaGC Team
+
+</div>
