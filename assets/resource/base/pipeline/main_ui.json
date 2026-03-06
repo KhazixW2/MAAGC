@@ -127,6 +127,115 @@
         "post_delay": 500,
         "timeout": 2000
     },
+    "BigMapRewardToken": {
+        "next": [
+            "BigMapRewardTokenStart",
+            "[JumpBack]UI_TaskPannelPageOpen",
+            "[JumpBack]UI_ReturnBigMap"
+        ]
+    },
+    "BigMapRewardTokenStart": {
+        "next": [
+            "[JumpBack]BigMapRewardToken1",
+            "[JumpBack]BigMapRewardToken2"
+        ],
+        "timeout": 2000
+    },
+    "BigMapRewardToken1": {
+        "max_hit": 1,
+        "recognition": "OCR",
+        "expected": [
+            "女王"
+        ],
+        "roi": [
+            11,
+            595,
+            284,
+            502
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "BigMapRewardTokenFull",
+            "BigMapRewardTokenDrawAvailable"
+        ]
+    },
+    "BigMapRewardToken2": {
+        "max_hit": 1,
+        "recognition": "OCR",
+        "expected": [
+            "王族"
+        ],
+        "roi": [
+            11,
+            595,
+            284,
+            502
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "BigMapRewardTokenFull",
+            "BigMapRewardTokenDrawAvailable"
+        ]
+    },
+    "BigMapRewardTokenDrawAvailable": {
+        "recognition": "OCR",
+        "expected": [
+            "可领取"
+        ],
+        "roi": [
+            228,
+            618,
+            288,
+            339
+        ],
+        "action": "Click",
+        "target": true,
+        "target_offset": [
+            0,
+            100,
+            0,
+            0
+        ],
+        "focus": "可领取王族/女王密令",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "BigMapRewardTokenFull": {
+        "recognition": "OCR",
+        "expected": [
+            "上限"
+        ],
+        "roi": [
+            103,
+            690,
+            504,
+            283
+        ],
+        "focus": "王族/女王密令满啦~",
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "BigMapRewardTokenFullClose"
+        ]
+    },
+    "BigMapRewardTokenFullClose": {
+        "recognition": "TemplateMatch",
+        "template": "close.png",
+        "roi": [
+            569,
+            24,
+            138,
+            469
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
     "UI_TaskPannelPageOpen": {
         "recognition": "TemplateMatch",
         "template": "UI/TaskPannelPageOpen.png",
@@ -159,6 +268,212 @@
         "next": [
             "UI_MainWindows",
             "[JumpBack]BackButton_500ms",
+            "[JumpBack]ClickCenter_500ms"
+        ]
+    },
+    "BigMapMarket": {
+        "next": [
+            "BigMapMarketStart",
+            "[JumpBack]UI_ReturnBigMap"
+        ]
+    },
+    "BigMapMarketStart": {
+        "recognition": "TemplateMatch",
+        "roi": [
+            12,
+            80,
+            239,
+            367
+        ],
+        "template": [
+            "UI/BigMapMarket.png"
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "focus": "购买折扣商品",
+        "next": [
+            "BigMapMarketShopping",
+        ]
+    },
+    "BigMapMarketShopping": {
+        "next": [
+            "[JumpBack]BigMapMarketShopBuy1",
+            "[JumpBack]BigMapMarketShopBuy2",
+            "[JumpBack]BigMapMarketShopBuy3"
+        ],
+        "timeout": 2000
+    },
+    "BigMapMarketShopBuy1": {
+        "recognition": "OCR",
+        "roi": [
+            50,
+            527,
+            178,
+            180
+        ],
+        "inverse": true,
+        "expected": [
+            "已售完"
+        ],
+        "target": [
+            50,
+            527,
+            178,
+            180
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "focus": "购买第一个折扣商品",
+        "next": [
+            "BigMapMarketShopBuyConfirm"
+        ]
+    },
+    "BigMapMarketShopBuy2": {
+        "recognition": "OCR",
+        "roi": [
+            273,
+            523,
+            194,
+            200
+        ],
+        "inverse": true,
+        "expected": [
+            "已售完"
+        ],
+        "target": [
+            273,
+            523,
+            194,
+            200
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "focus": "购买第二个折扣商品",
+        "next": [
+            "BigMapMarketShopBuyConfirm"
+        ]
+    },
+    "BigMapMarketShopBuy3": {
+        "recognition": "OCR",
+        "roi": [
+            497,
+            529,
+            183,
+            190
+        ],
+        "inverse": true,
+        "expected": [
+            "已售完"
+        ],
+        "target": [
+            497,
+            529,
+            183,
+            190
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "focus": "购买第三个折扣商品",
+        "next": [
+            "BigMapMarketShopBuyConfirm"
+        ]
+    },
+    "BigMapMarketShopBuyConfirm": {
+        "recognition": "OCR",
+        "roi": [
+            406,
+            668,
+            226,
+            338
+        ],
+        "expected": [
+            "确定"
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "ClickCenter_500ms"
+        ]
+    },
+    "BigMapMall": {
+        "next": [
+            "BigMapMallStart",
+            "[JumpBack]UI_ReturnBigMap"
+        ]
+    },
+    "BigMapMallStart": {
+        "recognition": "TemplateMatch",
+        "template": "UI/BigMapMall.png",
+        "roi": [
+            575,
+            114,
+            120,
+            413
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "focus": "打开商城",
+        "next": [
+            "BigMapMallDailyRewardOver",
+            "BigMapMallDailyReward"
+        ]
+    },
+    "BigMapMallDailyReward": {
+        "recognition": "OCR",
+        "expected": [
+            "免费"
+        ],
+        "roi": [
+            489,
+            250,
+            204,
+            331
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "focus": "领取每日礼包",
+        "next": [
+            "BigMapMallDailyRewardBuy"
+        ]
+    },
+    "BigMapMallDailyRewardOver": {
+        "recognition": "OCR",
+        "expected": [
+            "已领取"
+        ],
+        "roi": [
+            207,
+            247,
+            292,
+            309
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "focus": "每日礼包已经领取过了"
+    },
+    "BigMapMallDailyRewardBuy": {
+        "recognition": "OCR",
+        "expected": [
+            "购买"
+        ],
+        "roi": [
+            201,
+            640,
+            323,
+            244
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
             "ClickCenter_500ms"
         ]
     },
