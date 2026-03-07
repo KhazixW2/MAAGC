@@ -419,7 +419,10 @@
     },
     "BigMapMallStart": {
         "recognition": "TemplateMatch",
-        "template": "UI/BigMapMall.png",
+        "template": [
+            "UI/BigMapMall.png",
+            "UI/BigMapMall1.png"
+        ],
         "roi": [
             575,
             114,
