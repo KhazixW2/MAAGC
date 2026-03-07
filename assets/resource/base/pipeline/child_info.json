@@ -247,7 +247,7 @@
     "PannelChildSetNameCopy": {
         "recognition": "DirectHit",
         "action": "InputText",
-        "input_text": "感ss意a神自复公",
+        "input_text": "",
         "post_delay": 500,
         "timeout": 2000,
         "next": [

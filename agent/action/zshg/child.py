@@ -660,6 +660,9 @@ class ChildRec(CustomAction):
 
         # 6. 输入子孙命名
         context.run_task("BackButton_500ms")
-        context.run_task("PannelChildSetName")
+        context.run_task(
+            "PannelChildSetName",
+            pipeline_override={"PannelChildSetName": {"input_text": child_name}},
+        )
 
         return CustomAction.RunResult(success=True)

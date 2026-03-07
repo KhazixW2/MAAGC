@@ -202,12 +202,13 @@
         ],
         "action": "Click",
         "target": true,
-        "post_delay": 500,
+        "post_delay": 1000,
         "timeout": 2000
     },
     "FightStart": {
         "recognition": "OCR",
         "expected": "战斗开始",
+        "pre_delay": 500,
         "roi": [
             115,
             1094,
@@ -215,7 +216,7 @@
             186
         ],
         "action": "Click",
-        "post_delay": 2000,
+        "post_delay": 1000,
         "timeout": 2000
     },
     "FightEndRound": {

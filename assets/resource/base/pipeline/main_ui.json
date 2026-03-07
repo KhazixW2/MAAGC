@@ -293,7 +293,7 @@
         "timeout": 2000,
         "focus": "购买折扣商品",
         "next": [
-            "BigMapMarketShopping",
+            "BigMapMarketShopping"
         ]
     },
     "BigMapMarketShopping": {
