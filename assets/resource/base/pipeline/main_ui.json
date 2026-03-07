@@ -501,5 +501,50 @@
         "post_delay": 500,
         "timeout": 2000,
         "action": "Click"
+    },
+    "PopUpWindowTip": {
+        "recognition": "OCR",
+        "roi": [
+            107,
+            451,
+            490,
+            92
+        ],
+        "expected": [
+            "提示"
+        ],
+        "timeout": 2000
+    },
+    "PopUpWindowConfirm": {
+        "recognition": "OCR",
+        "expected": [
+            "确"
+        ],
+        "roi": [
+            101,
+            689,
+            505,
+            132
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 200,
+        "timeout": 2000
+    },
+    "PopUpWindowCancel": {
+        "recognition": "OCR",
+        "expected": [
+            "取"
+        ],
+        "roi": [
+            101,
+            689,
+            505,
+            132
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 200,
+        "timeout": 2000
     }
 }
