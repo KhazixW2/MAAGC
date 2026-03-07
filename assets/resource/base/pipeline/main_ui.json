@@ -135,6 +135,16 @@
         ]
     },
     "BigMapRewardTokenStart": {
+        "recognition": "OCR",
+        "expected": [
+            "女王"
+        ],
+        "roi": [
+            11,
+            595,
+            284,
+            502
+        ],
         "next": [
             "[JumpBack]BigMapRewardToken1",
             "[JumpBack]BigMapRewardToken2"
@@ -174,7 +184,7 @@
             502
         ],
         "action": "Click",
-        "post_delay": 500,
+        "post_delay": 800,
         "timeout": 2000,
         "next": [
             "BigMapRewardTokenFull",
@@ -201,13 +211,14 @@
             0
         ],
         "focus": "可领取王族/女王密令",
-        "post_delay": 500,
+        "post_delay": 800,
         "timeout": 2000
     },
     "BigMapRewardTokenFull": {
         "recognition": "OCR",
         "expected": [
-            "上限"
+            "上限",
+            "领完"
         ],
         "roi": [
             103,
@@ -217,7 +228,7 @@
         ],
         "focus": "王族/女王密令满啦~",
         "action": "Click",
-        "post_delay": 500,
+        "post_delay": 800,
         "timeout": 2000,
         "next": [
             "BigMapRewardTokenFullClose"
@@ -233,7 +244,7 @@
             469
         ],
         "action": "Click",
-        "post_delay": 500,
+        "post_delay": 800,
         "timeout": 2000
     },
     "UI_TaskPannelPageOpen": {

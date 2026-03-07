@@ -624,7 +624,7 @@ class ChildRec(CustomAction):
     def run(
         self, context: Context, argv: CustomAction.RunArg
     ) -> CustomAction.RunResult:
-        # 0.佣兵加入事件
+        # 0.佣兵生娃
 
         # 1.识别父母信息
         father_info = self.extract_parent_info(context, is_father=True)
@@ -662,7 +662,7 @@ class ChildRec(CustomAction):
         context.run_task("BackButton_500ms")
         context.run_task(
             "PannelChildSetName",
-            pipeline_override={"PannelChildSetName": {"input_text": child_name}},
+            pipeline_override={"PannelChildSetNameCopy": {"input_text": child_name}},
         )
 
         return CustomAction.RunResult(success=True)
