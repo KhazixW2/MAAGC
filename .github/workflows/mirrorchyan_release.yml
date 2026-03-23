@@ -22,7 +22,7 @@ jobs:
       - uses: MirrorChyan/uploading-action@v1
         with:
           filetype: latest-release
-          filename: ${{ format('MAAGC-{0}-{1}-*', matrix.os, matrix.arch) }}
+          filename: ${{ format('maagc-{0}-{1}-*MFAA*', matrix.os, matrix.arch) }}
           mirrorchyan_rid: MAAGC
           tag: ${{ inputs.tag }}
 
