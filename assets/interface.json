@@ -7,8 +7,8 @@
     "welcome": "首次使用！欢迎使用 MaaGC!",
     "github": "https://github.com/MaaXYZ/MAAGC",
     "version": "1.0.0",
-    "mirrorchyan_rid": "MaaGC",
-    "mirrorchyan_multiplatform": false,
+    "mirrorchyan_rid": "MAAGC",
+    "mirrorchyan_multiplatform": true,
     "controller": [
         {
             "name": "ADB",
