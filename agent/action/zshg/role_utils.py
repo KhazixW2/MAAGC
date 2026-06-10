@@ -409,13 +409,35 @@ def extract_all_role_info(context: Context) -> tuple:
     if not potential.values or all(v == 0.0 for v in potential.values.values()):
         logger.warning("潜力属性识别结果为空或全为 0")
 
-    # 2. 下滑到血脉面板
+    # 2. 先识别血脉信息（不先下滑）
     logger.info("开始识别血脉信息...")
-    context.run_task("PropertyPanelSwipeDown")
-    time.sleep(0.3)
-    bloodline = extract_bloodlines(context)
+    bloodline = Bloodline()
+    max_retry = 3
+
+    # 先尝试识别3次（不下滑）
+    for retry in range(max_retry):
+        bloodline = extract_bloodlines(context)
+        if bloodline.bloodlines:
+            break
+        logger.warning(f"血脉信息识别失败，重试 {retry + 1}/{max_retry}")
+        time.sleep(0.5)
+
+    # 如果3次都识别不到，下滑后再识别3次
     if not bloodline.bloodlines:
-        logger.warning("血脉信息识别结果为空")
+        logger.info("下滑到血脉面板，继续识别...")
+        context.run_task("PropertyPanelSwipeDown")
+        time.sleep(0.3)
+
+        for retry in range(max_retry):
+            bloodline = extract_bloodlines(context)
+            if bloodline.bloodlines:
+                break
+            logger.warning(f"下滑后识别失败，重试 {retry + 1}/{max_retry}")
+            time.sleep(0.5)
+
+    if not bloodline.bloodlines:
+        logger.error("识别血脉信息失败，已达到最大重试次数")
+        return Potential(), Bloodline(), []
 
     # 3. 识别特性信息（特性面板在血脉面板下方）
     logger.info("开始识别特性信息...")
