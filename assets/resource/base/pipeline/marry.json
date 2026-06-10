@@ -200,7 +200,10 @@
             1
         ],
         "post_delay": 500,
-        "timeout": 2000
+        "timeout": 2000,
+        "next": [
+            "CastleMarrySelectCountry"
+        ]
     },
     "CastleMarrySelectCountry": {
         "attach": {
@@ -211,10 +214,10 @@
             "森之祈愿"
         ],
         "roi": [
-            50,
-            345,
-            371,
-            596
+            0,
+            0,
+            0,
+            0
         ],
         "action": "Click",
         "post_delay": 1000,
