@@ -1,0 +1,473 @@
+{
+    "CastleEntry": {
+        "recognition": "OCR",
+        "roi": [
+            15,
+            1166,
+            686,
+            114
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 500,
+        "expected": "城堡",
+        "timeout": 2000
+    },
+    "CastleSwipeDown": {
+        "action": "Swipe",
+        "begin": [
+            377,
+            800,
+            1,
+            1
+        ],
+        "end": [
+            381,
+            650,
+            1,
+            1
+        ],
+        "post_delay": 1000,
+        "timeout": 2000
+    },
+    "CastleSwipeUp": {
+        "action": "Swipe",
+        "begin": [
+            381,
+            650,
+            1,
+            1
+        ],
+        "end": [
+            377,
+            800,
+            1,
+            1
+        ],
+        "post_delay": 1000,
+        "timeout": 2000
+    },
+    "CastleHall": {
+        "next": [
+            "CastleMarryWindow",
+            "[JumpBack]CastleMarryEntry",
+            "[JumpBack]CastleHallEntry",
+            "[JumpBack]CastleEntry",
+            "[JumpBack]CastleSwipeDown"
+        ],
+        "timeout": 2000
+    },
+    "CastleHallEntry": {
+        "recognition": "OCR",
+        "expected": [
+            "城堡主厅"
+        ],
+        "roi": [
+            60,
+            391,
+            609,
+            795
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000
+    },
+    "CastleMarryEntry": {
+        "attach": {
+            "description": "城堡联姻"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "联姻"
+        ],
+        "roi": [
+            107,
+            246,
+            526,
+            774
+        ],
+        "order_by": "Vertical",
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000
+    },
+    "CastleMarryingCheck": {
+        "attach": {
+            "description": "识别当前相亲对象是否正在联姻"
+        },
+        "recognition": "TemplateMatch",
+        "template": [
+            "Marry/MarriedFlag.png",
+            "Marry/StarFlag.png"
+        ],
+        "roi": [
+            20,
+            602,
+            690,
+            524
+        ],
+        "threshold": 0.6,
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000
+    },
+    "CastleMarryTitleCheck": {
+        "recognition": "OCR",
+        "expected": [
+            "公爵",
+            "伯爵",
+            "男爵",
+            "骑士"
+        ],
+        "roi": [
+            20,
+            602,
+            690,
+            524
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000
+    },
+    "CastleMarryWindow": {
+        "attach": {
+            "description": "检查当前是否是联姻界面"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "联姻"
+        ],
+        "roi": [
+            167,
+            0,
+            421,
+            75
+        ],
+        "focus": "成功进入联姻大厅"
+    },
+    "CastleMarryObjectsCheck": {
+        "attach": {
+            "description": "进入联姻界面，查看联姻次数"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "对象数量：[0-9]{1,2}"
+        ],
+        "roi": [
+            30,
+            232,
+            330,
+            152
+        ]
+    },
+    "CastleMarryEmailsCheck": {
+        "attach": {
+            "description": "识别正在联姻次数/最大联姻次数"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "回信数量：[0-9]/[0-9]"
+        ],
+        "roi": [
+            30,
+            232,
+            330,
+            152
+        ]
+    },
+    "CastleMarrySelectStart": {
+        "recognition": "OCR",
+        "expected": [
+            "确定"
+        ],
+        "roi": [
+            260,
+            1171,
+            207,
+            104
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000,
+        "next": [
+            "CastleMarrySelectCountry",
+            "CastleMarrySelectReject",
+            "[JumpBack]CastleMarrySelectCountrySweepDown"
+        ]
+    },
+    "CastleMarrySelectReject": {
+        "recognition": "OCR",
+        "expected": [
+            "还没活够",
+            "算了",
+            "很遗憾",
+            "没有人",
+            "什么",
+            "比起",
+            "结婚",
+            "伙计"
+        ],
+        "roi": [
+            189,
+            658,
+            434,
+            126
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000,
+        "focus": "被拒绝啦"
+    },
+    "CastleMarrySelectCountrySweepDown": {
+        "recognition": "DirectHit",
+        "action": "Swipe",
+        "begin": [
+            378,
+            654,
+            1,
+            1
+        ],
+        "end": [
+            383,
+            557,
+            1,
+            1
+        ],
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "CastleMarrySelectCountry": {
+        "attach": {
+            "description": "选择联姻国家"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "森之祈愿"
+        ],
+        "roi": [
+            50,
+            345,
+            371,
+            596
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000,
+        "next": [
+            "CastleMarrySelectCountryConfirm"
+        ]
+    },
+    "CastleMarrySelectCountryConfirm": {
+        "recognition": "OCR",
+        "expected": [
+            "确定"
+        ],
+        "roi": [
+            410,
+            757,
+            243,
+            313
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000,
+        "next": []
+    },
+    "CastleMarryGetInfoButton": {
+        "attach": {
+            "description": "了解一下"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "再了解下"
+        ],
+        "roi": [
+            20,
+            547,
+            679,
+            278
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": []
+    },
+    "CastleMarryGetInfoButtonAll": {
+        "attach": {
+            "description": "了解全部"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "了解全部"
+        ],
+        "roi": [
+            20,
+            547,
+            679,
+            278
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": []
+    },
+    "CastleMarryJustThisButton": {
+        "recognition": "OCR",
+        "expected": [
+            "就这个"
+        ],
+        "roi": [
+            20,
+            547,
+            679,
+            278
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": []
+    },
+    "CastleMarryJustThisReadName": {
+        "recognition": "OCR",
+        "expected": [
+            "确认向[\u4e00-\u9fa5]{1,5}发送"
+        ],
+        "roi": [
+            84,
+            443,
+            534,
+            224
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": []
+    },
+    "CastleMarryNextOneButton": {
+        "recognition": "OCR",
+        "expected": [
+            "下一位"
+        ],
+        "roi": [
+            20,
+            547,
+            679,
+            278
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "PopUpWindowConfirm"
+        ]
+    },
+    "CastleMarryLeave": {
+        "recognition": "TemplateMatch",
+        "template": "return.png",
+        "roi": [
+            603,
+            0,
+            117,
+            140
+        ],
+        "post_delay": 500,
+        "timeout": 2000,
+        "action": "Click",
+        "next": [
+            "PopUpWindowConfirm"
+        ]
+    },
+    "CastleMarry_AgeCheck": {
+        "recognition": "OCR",
+        "roi": [
+            425,
+            80,
+            124,
+            56
+        ],
+        "expected": [
+            "[0-9]"
+        ],
+        "timeout": 2000
+    },
+    "CastleParty": {
+        "attach": {
+            "description": "城堡宴会"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "宴会"
+        ],
+        "roi": [
+            107,
+            246,
+            526,
+            774
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000
+    },
+    "CastleDate": {
+        "attach": {
+            "description": "城堡约会"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "约会"
+        ],
+        "roi": [
+            107,
+            246,
+            526,
+            774
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000
+    },
+    "CastleMarryMatchmakerSpeech": {
+        "attach": {
+            "description": "聊天看相-识别媒人说话内容"
+        },
+        "recognition": "OCR",
+        "roi": [
+            169,
+            399,
+            521,
+            151
+        ],
+        "expected": [],
+        "timeout": 3000
+    },
+    "MarryModeSelect": {
+        "attach": {
+            "description": "联姻模式选择"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "trait"
+        ],
+        "enabled": false
+    },
+    "MarryRaceSelect": {
+        "attach": {
+            "description": "联姻种族选择"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "佩尔弗因王族"
+        ],
+        "enabled": true
+    },
+    "MarryMultiSelect": {
+        "attach": {
+            "description": "联姻模式选择-多角色/单角色"
+        },
+        "recognition": "OCR",
+        "expected": [
+            "multi"
+        ],
+        "enabled": true
+    }
+}

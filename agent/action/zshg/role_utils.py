@@ -409,13 +409,16 @@ def extract_all_role_info(context: Context) -> tuple:
     if not potential.values or all(v == 0.0 for v in potential.values.values()):
         logger.warning("潜力属性识别结果为空或全为 0")
 
-    # 2. 下滑到血脉面板
+    # 2. 识别血脉信息（在当前画面，不再无脑下滑，避免血脉标题被滑出可视区）
     logger.info("开始识别血脉信息...")
-    context.run_task("PropertyPanelSwipeDown")
-    time.sleep(0.3)
     bloodline = extract_bloodlines(context)
     if not bloodline.bloodlines:
-        logger.warning("血脉信息识别结果为空")
+        logger.warning("血脉信息识别结果为空，保持原状不滑屏")
+    else:
+        # 血脉识别成功后才下滑到特性面板
+        logger.info("血脉识别成功，下滑到特性面板...")
+        context.run_task("PropertyPanelSwipeDown")
+        time.sleep(0.3)
 
     # 3. 识别特性信息（特性面板在血脉面板下方）
     logger.info("开始识别特性信息...")

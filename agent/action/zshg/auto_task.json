@@ -1,0 +1,87 @@
+{
+    "StartCityTask": {
+        "next": [
+            "OpenCityTaskPanel"
+        ],
+        "timeout": 2000
+    },
+    "OpenCityTaskPanel": {
+        "next": [
+            "InTaskPannel",
+            "[JumpBack]FindCityTask_OCR",
+            "[JumpBack]SwitchInnerCity",
+            "[JumpBack]EnterCity"
+        ],
+        "timeout": 2000
+    },
+    "InTaskPannel": {
+        "recognition": "OCR",
+        "roi": [
+            284,
+            6,
+            149,
+            108
+        ],
+        "expected": "任务",
+        "timeout": 2000
+    },
+    "Auto_YearlyTask": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "YearlyTaskProcessor",
+        "post_delay": 500,
+        "timeout": 3000
+    },
+    "YearlyTaskMonths": {
+        "recognition": "OCR",
+        "enabled": true,
+        "expected": [
+            "12"
+        ]
+    },
+    "CustomTaskBlacklist": {
+        "recognition": "OCR",
+        "expected": [
+            ""
+        ]
+    },
+    "Auto_MarryTask": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "MarryProcessor",
+        "post_delay": 500,
+        "timeout": 3000
+    },
+    "Flag_EnableMarryTask": {
+        "enabled": true
+    },
+    "Auto_WeddingTask": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "WeddingProcessor",
+        "post_delay": 500,
+        "timeout": 3000
+    },
+    "Auto_DailyTask": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "DailyTaskProcessor",
+        "post_delay": 500,
+        "timeout": 3000
+    },
+    "Auto_FightTask": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "AutoFightProcessor",
+        "post_delay": 500,
+        "timeout": 60000
+    },
+    "Auto_TestFunc": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "TestFunc",
+        "post_delay": 500,
+        "timeout": 3000,
+        "enabled": true
+    }
+}
