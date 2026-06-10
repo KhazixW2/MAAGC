@@ -214,12 +214,8 @@ class MarryProcessor(CustomAction):
             f"选择的相亲种族: {self._target_race}，对应的国家: {self._target_country}"
         )
 
-        context.run_task(
-            "CastleMarrySelectStart",
-            pipeline_override={
-                "CastleMarrySelectCountry": {"expected": [self._target_country]}
-            },
-        )
+        # 手动执行：点确定 → 滑动 → OCR搜索国家 → 点击
+        self._select_country_manual(context, self._target_country)
 
         # 执行基于血统的匹配或特征匹配
         if self._mode == "trait":
@@ -527,15 +523,66 @@ class MarryProcessor(CustomAction):
         return True
 
     def _evaluate_bloodline_and_get_target(self, context: Context) -> tuple:
-        """进入血统面板，评估血统并确定联姻国家和种族"""
+        """进入血统面板，评估血统并确定联姻国家和种族。
+        规则：只识别当前画面一次，识别不到（未知）就保持原状不滑屏，
+        避免无脑滑动把"潜力/血脉/特性"标题滑出可视区。
+        """
         context.run_task("RolePanel_BloodPage")
         _, bloodline, _ = extract_all_role_info(context)
-
         highest_bloodline = self._get_highest_bloodline(bloodline)
+
+        if highest_bloodline == "未知":
+            logger.warning(
+                "当前画面未识别到血脉信息，保持原状不滑屏，使用默认兜底"
+            )
+        else:
+            logger.info(f"血脉识别成功：{highest_bloodline}")
+
         target_race, target_country = self._get_marriage_info(highest_bloodline)
         logger.info(f"联姻国家：{target_country}，联姻种族：{target_race}")
 
         return target_race, target_country
+
+    def _select_country_manual(self, context: Context, country: str) -> None:
+        """手动选择联姻国家：先搜 → 搜不到则滑动再搜 → 点击"""
+        # 1. 点击确定按钮进入国家选择
+        context.tasker.controller.post_click(363, 1223).wait()
+        time.sleep(1)
+
+        # 2. 先尝试搜索一次
+        if self._try_find_and_click_country(context, country):
+            return
+
+        # 3. 没搜到，滑动后再搜
+        logger.info(f"首次搜索未找到 [{country}]，滑动后再试")
+        context.tasker.controller.post_swipe(380, 600, 380, 500, 300).wait()
+        time.sleep(0.5)
+
+        if self._try_find_and_click_country(context, country):
+            return
+
+        logger.error(f"滑动后仍未找到国家 [{country}]")
+
+    def _try_find_and_click_country(self, context: Context, country: str) -> bool:
+        """OCR搜索国家名称并点击，返回是否成功"""
+        img = context.tasker.controller.post_screencap().wait().get()
+        reco = context.run_recognition(
+            "CastleMarrySelectCountry",
+            img,
+            pipeline_override={
+                "CastleMarrySelectCountry": {"expected": [country]}
+            },
+        )
+        if reco.hit and reco.best_result:
+            box = reco.best_result.box
+            cx = box[0] + box[2] // 2
+            cy = box[1] + box[3] // 2
+            logger.info(f"找到国家 [{country}]，点击位置: ({cx}, {cy})")
+            context.tasker.controller.post_click(cx, cy).wait()
+            time.sleep(0.5)
+            context.run_task("CastleMarrySelectCountryConfirm")
+            return True
+        return False
 
     def _execute_marriage_matching(
         self,
@@ -545,20 +592,15 @@ class MarryProcessor(CustomAction):
     ) -> None:
         """执行联姻匹配流程（分支点）"""
         context.run_task("BackButton_500ms")
-        context.run_task(
-            "CastleMarrySelectStart",
-            pipeline_override={
-                "CastleMarrySelectCountry": {"expected": [target_country]}
-            },
-        )
+        self._select_country_manual(context, target_country)
 
         if self._mode == "trait":
-            self._execute_chat_matching(context)
+            self._execute_chat_matching(context, target_race)
         else:
             self._execute_high_blood_matching(context, target_race)
 
-    def _execute_chat_matching(self, context: Context) -> None:
-        """聊天看相模式：识别橙色特征即接受，无则尝试下一位"""
+    def _execute_chat_matching(self, context: Context, target_race: str) -> None:
+        """聊天看相模式：血统匹配目标种族就联姻（不需要橙色特征）"""
 
         max_attempts = self._current_max_attempts
 
@@ -571,7 +613,7 @@ class MarryProcessor(CustomAction):
 
             logger.info(f"第 {attempt}/{max_attempts} 次尝试")
 
-            # 聊天循环：收集信息，遇到照片则看脸
+            # 聊天循环：收集信息，遇到照片则看血统
             for round_num in range(10):
                 if context.tasker.stopping:
                     return
@@ -589,11 +631,15 @@ class MarryProcessor(CustomAction):
 
                 state = self._detect_chat_state_from_text(text)
                 if state == "photo":
-                    self._recognize_face_rating(context, profile)
-                    # 识别到橙色特征，立即接受
-                    if profile.has_orange_feature:
+                    # 检查血统是否匹配目标种族
+                    race_matched = any(
+                        target_race in bl or bl in target_race
+                        for bl in profile.bloodlines
+                    )
+                    if race_matched:
                         logger.info(
-                            f"第 {attempt} 次尝试识别到橙色特征，接受该相亲对象: "
+                            f"第 {attempt} 次尝试，血统{list(profile.bloodlines.keys())}"
+                            f"匹配目标种族 [{target_race}]，接受该相亲对象: "
                             f"姓名={profile.name}, 爵位={profile.title}"
                         )
                         context.run_task("CastleMarryJustThisButton")
@@ -601,9 +647,10 @@ class MarryProcessor(CustomAction):
                         self._email_current += 1
                         return
                     else:
-                        # 无橙色特征，尝试下一位
+                        # 血统不匹配，尝试下一位
                         logger.info(
-                            f"第 {attempt} 次尝试无橙色特征，尝试下一位: "
+                            f"第 {attempt} 次尝试，血统{list(profile.bloodlines.keys())}"
+                            f"不匹配目标种族 [{target_race}]，尝试下一位: "
                             f"姓名={profile.name}"
                         )
                         break
@@ -619,7 +666,7 @@ class MarryProcessor(CustomAction):
                 context.run_task("CastleMarryNextOneButton")
 
         # 5次都失败，拒绝并离开
-        logger.info(f"经过 {max_attempts} 次尝试均无橙色特征，拒绝该候选人")
+        logger.info(f"经过 {max_attempts} 次尝试均无匹配种族 [{target_race}]，拒绝该候选人")
         context.run_task("CastleMarryLeave")
 
     def _execute_high_blood_matching(self, context: Context, target_race: str) -> None:
