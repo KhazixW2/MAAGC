@@ -31,11 +31,11 @@ def preprocess_events(context: Context) -> bool:
                 screenshot = context.tasker.controller.post_screencap().wait().get()
                 next_event = detect_and_manage_event(context, screenshot)
                 if next_event is not None:
-                    logger.info(f"检测到后续事件: {event_type} → 继续处理")
-                    break  # 还有事件，继续主循环
+                    logger.info(f"检测到后续事件: {next_event} → 继续处理")
+                    break
             else:
                 logger.info("后续无重复事件，检测完成")
-                return True  # 3次都无事件，退出
+                return True
 
         time.sleep(0.5)
     return True
@@ -290,32 +290,39 @@ def process_single_month(context: Context) -> bool:
     """处理单个月份的完整流程"""
 
     preprocess_events(context)
+    EnableGrothTrial = context.get_node_data("Flag_GrowthTrialMode").get("enabled")
+    if EnableGrothTrial: 
+        context.run_task("GrowthTrial_Start")
+        fight_utils._process_fighting(context)
+        fight_utils._process_post(context)
+    else :
+        target_city_data = context.get_node_data("EnterCity")
+        target_city = (
+            target_city_data.get("recognition", {})
+            .get("param", {})
+            .get("expected", ["王座堡"])[0]
+            if target_city_data
+            else "王座堡"
+        )
+        logger.info(f"目标城市: {target_city}")
+        reached, traveled = _ensure_at_target_city(context, target_city)
+        if not reached:
+            logger.error(f"无法到达目标城市: {target_city}")
+            return False
 
-    target_city_data = context.get_node_data("EnterCity")
-    target_city = (
-        target_city_data.get("recognition", {})
-        .get("param", {})
-        .get("expected", ["王座堡"])[0]
-        if target_city_data
-        else "王座堡"
-    )
-    logger.info(f"目标城市: {target_city}")
-    reached, traveled = _ensure_at_target_city(context, target_city)
-    if not reached:
-        logger.error(f"无法到达目标城市: {target_city}")
-        return False
+        if traveled:
+            preprocess_events(context)
+            context.run_task("BackButton_500ms")
 
-    if traveled:
-        preprocess_events(context)
-        context.run_task("BackButton_500ms")
+        month = check_current_month(context)
+        if month is None:
+            return False
 
-    month = check_current_month(context)
-    if month is None:
-        return False
+        handle_festival_by_month(context, month)
 
-    handle_festival_by_month(context, month)
 
-    fight_utils.start_task(context)
+        # 选择进入的关卡
+        fight_utils.start_task(context)
 
     return True
 
