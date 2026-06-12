@@ -144,7 +144,7 @@
     "CastleMarrySelectStart": {
         "recognition": "OCR",
         "expected": [
-            "确定"
+            "联姻"
         ],
         "roi": [
             260,
@@ -199,11 +199,8 @@
             1,
             1
         ],
-        "post_delay": 500,
-        "timeout": 2000,
-        "next": [
-            "CastleMarrySelectCountry"
-        ]
+        "post_delay": 1000,
+        "timeout": 2000
     },
     "CastleMarrySelectCountry": {
         "attach": {
@@ -214,10 +211,10 @@
             "森之祈愿"
         ],
         "roi": [
-            0,
-            0,
-            0,
-            0
+            50,
+            345,
+            371,
+            596
         ],
         "action": "Click",
         "post_delay": 1000,
