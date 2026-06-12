@@ -11,7 +11,7 @@ def preprocess_events(context: Context) -> bool:
     """前处理：检测并处理随机事件"""
     logger.info("检测随机事件...")
 
-    max_iterations = 10
+    max_iterations = 15
     no_event_count = 0
     for i in range(max_iterations):
         screenshot = context.tasker.controller.post_screencap().wait().get()
@@ -25,19 +25,8 @@ def preprocess_events(context: Context) -> bool:
         else:
             no_event_count = 0
             logger.info(f"事件处理完成: {event_type}")
-            # 事件处理后，额外检测3次，确认无重复事件
-            for _ in range(3):
-                time.sleep(0.5)
-                screenshot = context.tasker.controller.post_screencap().wait().get()
-                next_event = detect_and_manage_event(context, screenshot)
-                if next_event is not None:
-                    logger.info(f"检测到后续事件: {next_event} → 继续处理")
-                    break
-            else:
-                logger.info("后续无重复事件，检测完成")
-                return True
-
-        time.sleep(0.5)
+            
+        time.sleep(0.3)
     return True
 
 
