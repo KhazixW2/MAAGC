@@ -276,6 +276,97 @@
         ],
         "action": "Click",
         "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "CheckNameGood",
+            "[JumpBack]CheckNameInvalid"
+        ]
+    },
+    "CheckNameGood": {
+        "recognition": "OCR",
+        "expected": [
+            "第[0-9]+个孩子"
+        ],
+        "roi": [
+            56,
+            480,
+            604,
+            97
+        ]
+    },
+    "CheckNameInvalid": {
+        "recognition": "OCR",
+        "expected": [
+            "重新取名",
+            "不规范",
+            "不能超过"
+        ],
+        "roi": [
+            36,
+            455,
+            640,
+            332
+        ],
+        "next": [
+            "CheckNameInvalidConfirm"
+        ]
+    },
+    "CheckNameInvalidConfirm": {
+        "recognition": "OCR",
+        "expected": [
+            "确定"
+        ],
+        "roi": [
+            36,
+            455,
+            640,
+            332
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "CheckNameInvalidClickRandom"
+        ]
+    },
+    "CheckNameInvalidClickRandom": {
+        "recognition": "OCR",
+        "expected": [
+            "[\u4E00-\u9FFF]+"
+        ],
+        "roi": [
+            253,
+            1051,
+            255,
+            111
+        ],
+        "action": "Click",
+        "target": true,
+        "target_offset": [
+            272,
+            0,
+            0,
+            0
+        ],
+        "post_delay": 800,
+        "timeout": 2000,
+        "next": [
+            "CheckNameInvalidConfirmRandom"
+        ]
+    },
+    "CheckNameInvalidConfirmRandom": {
+        "recognition": "OCR",
+        "expected": [
+            "确定"
+        ],
+        "roi": [
+            169,
+            1176,
+            385,
+            98
+        ],
+        "action": "Click",
+        "post_delay": 500,
         "timeout": 2000
     },
     "Auto_PannelCheck": {
