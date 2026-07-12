@@ -276,11 +276,7 @@
         ],
         "action": "Click",
         "post_delay": 500,
-        "timeout": 2000,
-        "next": [
-            "CheckNameGood",
-            "[JumpBack]CheckNameInvalid"
-        ]
+        "timeout": 2000
     },
     "CheckNameGood": {
         "recognition": "OCR",
@@ -330,24 +326,18 @@
         ]
     },
     "CheckNameInvalidClickRandom": {
-        "recognition": "OCR",
-        "expected": [
-            "[\u4E00-\u9FFF]+"
+        "recognition": "TemplateMatch",
+        "template": [
+            "Marry/random_baby_name.png"
         ],
         "roi": [
-            253,
+            606,
             1051,
-            255,
-            111
+            92,
+            103
         ],
         "action": "Click",
         "target": true,
-        "target_offset": [
-            272,
-            0,
-            0,
-            0
-        ],
         "post_delay": 800,
         "timeout": 2000,
         "next": [

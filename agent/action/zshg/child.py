@@ -602,4 +602,8 @@ class ChildRec(CustomAction):
             pipeline_override={"PannelChildSetNameCopy": {"input_text": child_name}},
         )
 
+        # 8.识别是否无效
+        if context.run_recognition("CheckNameInvalid",context.tasker.controller.post_screencap().wait().get()):
+            context.run_task("CheckNameInvalid")
+
         return CustomAction.RunResult(success=True)
