@@ -31,7 +31,7 @@
     },
     "Event_MercenaryJoinConfirm": {
         "recognition": "OCR",
-        "expected": "确认",
+        "expected": "招募",
         "roi": [
             118,
             786,
@@ -100,7 +100,6 @@
         "timeout": 2000,
         "next": []
     },
-    // 事件：启航节
     "Event_Launch": {
         "recognition": "OCR",
         "expected": "启航节",
@@ -229,7 +228,6 @@
         "post_delay": 500,
         "timeout": 2000
     },
-    // 事件：丰收节
     "Event_HarvestFestival": {
         "recognition": "OCR",
         "expected": "丰收节",
@@ -272,7 +270,6 @@
             "Event_HarvestFestivalConfirm"
         ]
     },
-    // 口粮预交
     "Event_HarvestFestivalPrePay": {
         "recognition": "OCR",
         "expected": "口粮预交",
@@ -300,7 +297,6 @@
         "post_delay": 500,
         "timeout": 2000
     },
-    //  worship
     "Event_HarvestFestivalWorship": {
         "recognition": "OCR",
         "expected": "祈祷",
@@ -330,7 +326,6 @@
         "post_delay": 500,
         "timeout": 2000
     },
-    // 事件：表白成功
     "Event_ConfessionSuccess": {
         "recognition": "OCR",
         "roi": [
@@ -349,7 +344,6 @@
             "Auto_WeddingTask"
         ]
     },
-    // 检查当前是否婚礼页面
     "Event_WeddingPage": {
         "recognition": "OCR",
         "expected": [
@@ -395,7 +389,6 @@
         ],
         "timeout": 2000
     },
-    //查找目标宴会按钮
     "Event_WeddingTitleButton": {
         "recognition": "DirectHit",
         "next": [
@@ -454,7 +447,6 @@
         "post_delay": 500,
         "timeout": 2000
     },
-    // 事件：表白失败
     "Event_ConfessionFail": {
         "recognition": "OCR",
         "roi": [

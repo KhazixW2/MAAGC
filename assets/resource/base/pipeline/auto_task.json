@@ -12,7 +12,7 @@
             "[JumpBack]SwitchInnerCity",
             "[JumpBack]EnterCity"
         ],
-        "timeout": 2000
+        "timeout": 3000
     },
     "InTaskPannel": {
         "recognition": "OCR",
@@ -22,13 +22,28 @@
             149,
             108
         ],
-        "expected": "任务",
+        "expected": [
+            "任务",
+            "放弃",
+            "接受",
+            "一键接受",
+            "一键"
+        ],
+        "pre_delay": 500,
+        "rate_limit": 500,
         "timeout": 2000
     },
     "Auto_FightTask": {
         "recognition": "DirectHit",
         "action": "Custom",
         "custom_action": "TaskProcessor",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Auto_SingleFightTask": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "SingleFightTaskProcessor",
         "post_delay": 500,
         "timeout": 2000
     },
