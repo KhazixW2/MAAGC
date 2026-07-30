@@ -35,6 +35,100 @@
         "post_delay": 1500,
         "timeout": 2000
     },
+    "TravelDialog": {
+        "recognition": "OCR",
+        "expected": [
+            "提示",
+            "前往"
+        ],
+        "roi": [
+            100,
+            410,
+            520,
+            130
+        ],
+        "pre_delay": 600,
+        "timeout": 2000
+    },
+    "TravelDialog_ChooseFast": {
+        "recognition": "OCR",
+        "expected": [
+            "庄园传送",
+            "乘船"
+        ],
+        "roi": [
+            200,
+            700,
+            250,
+            110
+        ],
+        "order_by": "Vertical",
+        "target": true,
+        "target_offset": [
+            260,
+            30,
+            0,
+            0
+        ],
+        "action": "Click",
+        "post_delay": 2500,
+        "timeout": 2000
+    },
+    "TravelDialog_BoatDisabled": {
+        "recognition": "OCR",
+        "expected": [
+            "无此交通工具",
+            "无此交通",
+            "本月已经使用",
+            "上个月已经使用",
+            "本月已用过",
+            "已使用",
+            "已用过"
+        ],
+        "roi": [
+            200,
+            700,
+            250,
+            110
+        ],
+        "timeout": 2000
+    },
+    "TravelDialog_ChooseSlow": {
+        "recognition": "OCR",
+        "expected": [
+            "航海",
+            "步行"
+        ],
+        "roi": [
+            200,
+            540,
+            250,
+            110
+        ],
+        "order_by": "Vertical",
+        "target": true,
+        "target_offset": [
+            260,
+            30,
+            0,
+            0
+        ],
+        "action": "Click",
+        "post_delay": 2500,
+        "timeout": 2000
+    },
+    "TravelDialog_Close": {
+        "recognition": "DirectHit",
+        "target": [
+            660,
+            235,
+            45,
+            50
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "timeout": 2000
+    },
     "SwitchOuterCity": {
         "recognition": "OCR",
         "expected": "外城",
@@ -228,6 +322,18 @@
         "post_delay": 1000,
         "timeout": 2000
     },
+    "FightStartFallback": {
+        "recognition": "DirectHit",
+        "action": "Click",
+        "target": [
+            115,
+            1094,
+            495,
+            186
+        ],
+        "post_delay": 1000,
+        "timeout": 2000
+    },
     "FightEndRound": {
         "recognition": "TemplateMatch",
         "template": "UI/FightEndRound.png",
@@ -240,6 +346,35 @@
         "action": "Click",
         "post_delay": 2000,
         "timeout": 2000
+    },
+    "FightRoundNumber": {
+        "recognition": "OCR",
+        "expected": "回合\\s*[:：]?\\s*\\d+",
+        "roi": [
+            570,
+            1135,
+            150,
+            80
+        ],
+        "rate_limit": 0,
+        "pre_delay": 0,
+        "post_delay": 0,
+        "timeout": 1000
+    },
+    "FightSurvivalObjective": {
+        "recognition": "OCR",
+        "expected": "坚守\\s*\\d+\\s*回合",
+        "roi": [
+            442,
+            1205,
+            140,
+            65
+        ],
+        "action": "DoNothing",
+        "rate_limit": 0,
+        "pre_delay": 0,
+        "post_delay": 0,
+        "timeout": 1000
     },
     "FightRivalRound": {
         "recognition": "OCR",
@@ -442,6 +577,21 @@
         "recognition": "OCR",
         "expected": [
             "前往群岛"
+        ],
+        "roi": [
+            297,
+            1228,
+            125,
+            52
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "ClickGoToContinent": {
+        "recognition": "OCR",
+        "expected": [
+            "前往大陆"
         ],
         "roi": [
             297,
