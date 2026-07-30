@@ -1,118 +1,118 @@
 {
-    "Map_MoveMainCityRight": {
-        "recognition": "DirectHit",
-        "action": "Swipe",
-        "begin": [
-            613,
-            965,
-            1,
-            1
-        ],
-        "end": [
-            673,
-            964,
-            1,
-            1
-        ],
-        "post_delay": 500,
-        "timeout": 2000
-    },
-    "Map_MoveMainCityLeft": {
-        "recognition": "DirectHit",
-        "action": "Swipe",
-        "begin": [
-            610,
-            961,
-            1,
-            1
-        ],
-        "end": [
-            541,
-            962,
-            1,
-            1
-        ],
-        "post_delay": 500,
-        "timeout": 2000
-    },
-    "Map_MoveMainCityNow": {
-        "recognition": "DirectHit",
-        "action": "Click",
-        "target": [
-            610,
-            964,
-            10,
-            10
-        ],
-        "post_delay": 500,
-        "timeout": 2000
-    },
-    "Map_SwipeUp_OnBigMap": {
-        "recognition": "DirectHit",
-        "action": "Swipe",
-        "begin": [
-            360,
-            400,
-            1,
-            1
-        ],
-        "end": [
-            360,
-            800,
-            1,
-            1
-        ],
-        "duration": 1000,
-        "post_delay": 500,
-        "timeout": 2000
-    },
-    "Map_SwipeDown_OnBigMap": {
-        "recognition": "DirectHit",
-        "action": "Swipe",
-        "begin": [
-            360,
-            800,
-            1,
-            1
-        ],
-        "end": [
-            360,
-            400,
-            1,
-            1
-        ],
-        "duration": 1000,
-        "post_delay": 500,
-        "timeout": 2000
-    },
-    "Map_CheckCurrentMonth": {
-        "recognition": "OCR",
-        "expected": "2023年12月",
-        "roi": [
-            284,
-            6,
-            149,
-            108
-        ],
-        "timeout": 2000
-    },
-    "Map_GetMonth": {
-        "recognition": "TemplateMatch",
-        "template": "UI/month/1.png",
-        "roi": [
-            58,
-            2,
-            610,
-            221
-        ],
-        "post_delay": 500,
-        "timeout": 2000
-    },
-    "AutoFight_Start": {
-        "recognition": "DirectHit",
-        "action": "Custom",
-        "custom_action": "AutoFightProcessor",
-        "post_delay": 500,
-        "timeout": 2000
-    }
+	"Map_MoveMainCityRight": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [
+			613,
+			965,
+			1,
+			1
+		],
+		"end": [
+			673,
+			964,
+			1,
+			1
+		],
+		"post_delay": 500,
+		"timeout": 2000
+	},
+	"Map_MoveMainCityLeft": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [
+			610,
+			961,
+			1,
+			1
+		],
+		"end": [
+			541,
+			962,
+			1,
+			1
+		],
+		"post_delay": 500,
+		"timeout": 2000
+	},
+	"Map_MoveMainCityNow": {
+		"recognition": "DirectHit",
+		"action": "Click",
+		"target": [
+			610,
+			964,
+			10,
+			10
+		],
+		"post_delay": 500,
+		"timeout": 2000
+	},
+	"Map_SwipeUp_OnBigMap": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [
+			360,
+			400,
+			1,
+			1
+		],
+		"end": [
+			360,
+			800,
+			1,
+			1
+		],
+		"duration": 1000,
+		"post_delay": 500,
+		"timeout": 2000
+	},
+	"Map_SwipeDown_OnBigMap": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [
+			360,
+			800,
+			1,
+			1
+		],
+		"end": [
+			360,
+			400,
+			1,
+			1
+		],
+		"duration": 1000,
+		"post_delay": 500,
+		"timeout": 2000
+	},
+	"Map_CheckCurrentMonth": {
+		"recognition": "OCR",
+		"expected": "2023年12月",
+		"roi": [
+			284,
+			6,
+			149,
+			108
+		],
+		"timeout": 2000
+	},
+	"Map_GetMonth": {
+		"recognition": "TemplateMatch",
+		"template": "UI/month/1.png",
+		"roi": [
+			58,
+			2,
+			610,
+			221
+		],
+		"post_delay": 500,
+		"timeout": 2000
+	},
+	"AutoFight_Start": {
+		"recognition": "DirectHit",
+		"action": "Custom",
+		"custom_action": "AutoFightProcessor",
+		"post_delay": 500,
+		"timeout": 2000
+	}
 }
