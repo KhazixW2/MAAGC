@@ -15,13 +15,13 @@ from .battle_grid import BattleGrid, Cell, CellType, GridScanner, ROWS, COLS
 class AutoFightProcessor(CustomAction):
     """先被动等待反击，超过指定回合后执行主动战斗。
 
-    策略：前 15 轮全部依赖「结束回合 + 自动反击」，让敌人自己走过来；
-    仅当 15 轮后仍未通关时，才进入主动搜索与追击模式。这样可以减少决策
+    策略：前 20 轮全部依赖「结束回合 + 自动反击」，让敌人自己走过来；
+    仅当 20 轮后仍未通关时，才进入主动搜索与追击模式。这样可以减少决策
     次数，避免每局都触发 16 视野螺旋搜索的低性价比操作。
     """
 
-    MAX_ROUNDS = 30
-    ACTIVE_FROM_ROUND = 15
+    MAX_ROUNDS = 40
+    ACTIVE_FROM_ROUND = 20
     MAX_SEARCH_SWIPES = 16
     MAX_STRAIGHT_SEARCH_SWIPES = 3
     # 右下角“回合：N”中的数字是常驻 HUD，不依赖一闪而过的回合提示。
