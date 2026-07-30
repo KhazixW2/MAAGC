@@ -1,158 +1,339 @@
 {
-    "Battle_ThreatRegion": {
-        "recognition": "ColorMatch",
-        "roi": [
-            0,
-            0,
-            720,
-            1160
-        ],
-        "method": 40,
+	"Battle_ThreatRegion": {
+		"recognition": "ColorMatch",
+		"roi": [
+			0,
+			0,
+			720,
+			1160
+		],
+		"method": 40,
+		"upper": [
+			20,
+			200,
+			165
+		],
+		"lower": [
+			2,
+			130,
+			75
+		],
+		"count": 10,
+		"connected": true,
+		"timeout": 3000,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 0
+	},
+	"Battle_ThreatToggleOn": {
+		"recognition": "ColorMatch",
+		"roi": [210, 1190, 80, 80],
+		"method": 40,
+		"lower": [0, 120, 120],
+		"upper": [10, 255, 255],
+		"count": 100,
+		"connected": false,
+		"timeout": 1000,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 0
+	},
+	"Battle_ToggleThreat": {
+		"recognition": "DirectHit",
+		"target": [210, 1180, 80, 90],
+		"action": "Click",
+		"timeout": 1000,
+		"post_delay": 300
+	},
+	"Battle_UnitScan_Blue": {
+		"recognition": "ColorMatch",
+		"roi": [
+			0,
+			0,
+			720,
+			1160
+		],
+		"method": 40,
+		"lower": [
+			95,
+			80,
+			130
+		],
+		"upper": [
+			125,
+			255,
+			255
+		],
+		"count": 8,
+		"connected": true,
+		"timeout": 3000,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 0
+	},
+	"Battle_UnitScan_Red": {
+		"recognition": "ColorMatch",
+		"roi": [
+			0,
+			0,
+			720,
+			1160
+		],
+		"method": 40,
+		"lower": [
+			0,
+			80,
+			130
+		],
         "upper": [
-            20,
-            200,
-            165
-        ],
-        "lower": [
-            2,
-            130,
-            75
-        ],
-        "count": 10,
-        "connected": true,
-        "timeout": 3000,
-        "post_delay": 500
-    },
-    "Battle_UnitScan_Blue": {
-        "recognition": "ColorMatch",
-        "roi": [
-            0,
-            0,
-            720,
-            1160
-        ],
-        "method": 40,
-        "lower": [
-            95,
-            80,
-            130
-        ],
-        "upper": [
-            125,
+            22,
             255,
             255
         ],
-        "count": 8,
-        "connected": true,
-        "timeout": 3000,
-        "post_delay": 500
-    },
-    "Battle_UnitScan_Red": {
-        "recognition": "ColorMatch",
-        "roi": [
-            0,
-            0,
-            720,
-            1160
-        ],
-        "method": 40,
-        "lower": [
-            0,
-            80,
-            130
-        ],
-        "upper": [
-            15,
-            255,
-            255
-        ],
-        "count": 8,
-        "connected": true,
-        "timeout": 3000,
-        "post_delay": 500
-    },
-    "Battle_UnitScan_Green": {
-        "recognition": "ColorMatch",
-        "roi": [
-            0,
-            0,
-            720,
-            1160
-        ],
-        "method": 40,
-        "lower": [
-            60,
-            140,
-            110
-        ],
-        "upper": [
-            85,
-            255,
-            220
-        ],
-        "count": 12,
-        "connected": true,
-        "timeout": 3000,
-        "post_delay": 500
-    },
-    "Battle_MoveRange": {
-        "recognition": "ColorMatch",
-        "roi": [
-            0,
-            0,
-            720,
-            1160
-        ],
-        "method": 40,
-        "lower": [
-            60,
-            100,
-            90
-        ],
-        "upper": [
-            130,
-            255,
-            230
-        ],
-        "count": 50,
-        "connected": true,
-        "timeout": 3000,
-        "post_delay": 500
-    },
-    "Battle_AttackRange": {
-        "recognition": "ColorMatch",
-        "roi": [
-            0,
-            0,
-            720,
-            1160
-        ],
-        "method": 40,
-        "lower": [
-            10,
-            120,
-            100
-        ],
-        "upper": [
-            45,
-            255,
-            220
-        ],
-        "count": 50,
-        "connected": true,
-        "timeout": 3000,
-        "post_delay": 500
-    },
-    "Battle_Cancel": {
-        "recognition": "DirectHit",
-        "target": [
-            650,
-            0,
-            50,
-            50
-        ],
-        "action": "Click",
-        "timeout": 1000,
-        "post_delay": 1000
-    }
+		"count": 8,
+		"connected": true,
+		"timeout": 3000,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 0
+	},
+	"Battle_UnitScan_Green": {
+		"recognition": "ColorMatch",
+		"roi": [
+			0,
+			0,
+			720,
+			1160
+		],
+		"method": 40,
+		"lower": [
+			60,
+			140,
+			110
+		],
+		"upper": [
+			85,
+			255,
+			220
+		],
+		"count": 12,
+		"connected": true,
+		"timeout": 3000,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 0
+	},
+	"Battle_MoveRange": {
+		"recognition": "ColorMatch",
+		"roi": [
+			0,
+			0,
+			720,
+			1160
+		],
+		"method": 40,
+		"lower": [
+			75,
+			150,
+			110
+		],
+		"upper": [
+			114,
+			225,
+			198
+		],
+		"count": 50,
+		"connected": true,
+		"timeout": 3000,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 0
+	},
+	"Battle_AttackRange": {
+		"recognition": "ColorMatch",
+		"roi": [
+			0,
+			0,
+			720,
+			1160
+		],
+		"method": 40,
+		"lower": [
+			15,
+			164,
+			121
+		],
+		"upper": [
+			33,
+			223,
+			188
+		],
+		"count": 50,
+		"connected": true,
+		"timeout": 3000,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 0
+	},
+	"Battle_MapPanRight": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [
+			600,
+			1000,
+			1,
+			1
+		],
+		"end": [
+			120,
+			1000,
+			1,
+			1
+		],
+		"duration": 1500,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 600,
+		"timeout": 2000
+	},
+	"Battle_MapPanDown": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [
+			80,
+			900,
+			1,
+			1
+		],
+		"end": [
+			80,
+			420,
+			1,
+			1
+		],
+		"duration": 1500,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 600,
+		"timeout": 2000
+	},
+	"Battle_MapPanLeft": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [
+			120,
+			1000,
+			1,
+			1
+		],
+		"end": [
+			600,
+			1000,
+			1,
+			1
+		],
+		"duration": 1500,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 600,
+		"timeout": 2000
+	},
+	"Battle_MapPanUp": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [
+			80,
+			420,
+			1,
+			1
+		],
+		"end": [
+			80,
+			900,
+			1,
+			1
+		],
+		"duration": 1500,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 600,
+		"timeout": 2000
+	},
+	"Battle_MapNudgeRight": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [520, 800, 1, 1],
+		"end": [280, 800, 1, 1],
+		"duration": 900,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 350,
+		"timeout": 1500
+	},
+	"Battle_MapNudgeDown": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [100, 760, 1, 1],
+		"end": [100, 520, 1, 1],
+		"duration": 900,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 350,
+		"timeout": 1500
+	},
+	"Battle_MapNudgeLeft": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [280, 800, 1, 1],
+		"end": [520, 800, 1, 1],
+		"duration": 900,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 350,
+		"timeout": 1500
+	},
+	"Battle_MapNudgeUp": {
+		"recognition": "DirectHit",
+		"action": "Swipe",
+		"begin": [100, 520, 1, 1],
+		"end": [100, 760, 1, 1],
+		"duration": 900,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 350,
+		"timeout": 1500
+	},
+	"Battle_SelectedRoleCard": {
+		"recognition": "OCR",
+		"expected": ["攻击"],
+		"roi": [130, 180, 320, 190],
+		"action": "DoNothing",
+		"timeout": 1000,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 0
+	},
+	"Battle_CollapseRoleCard": {
+		"recognition": "OCR",
+		"expected": ["攻击"],
+		"roi": [130, 180, 320, 190],
+		"target": [335, 0, 50, 55],
+		"action": "Click",
+		"timeout": 1000,
+		"rate_limit": 0,
+		"pre_delay": 0,
+		"post_delay": 300
+	},
+	"Battle_Cancel": {
+		"recognition": "DirectHit",
+		"target": [
+			660,
+			0,
+			60,
+			70
+		],
+		"action": "Click",
+		"timeout": 1000,
+		"post_delay": 300
+	}
 }
