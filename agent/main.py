@@ -363,8 +363,12 @@ def agent(is_dev_mode=False):
         if is_dev_mode:
             from utils.logger import change_console_level
 
-            change_console_level("DEBUG")
-            logger.info("开发模式：日志等级已设置为DEBUG")
+            console_level = os.environ.get("MAAGC_CONSOLE_LOG_LEVEL", "INFO")
+            change_console_level(console_level)
+            logger.info(
+                f"开发模式：控制台日志等级={console_level}，"
+                "完整诊断日志写入 debug/custom"
+            )
 
         from maa.agent.agent_server import AgentServer
         from maa.toolkit import Toolkit

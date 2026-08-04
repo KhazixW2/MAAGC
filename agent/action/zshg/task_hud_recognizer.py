@@ -19,6 +19,7 @@ class HudTaskInfo:
     task_description: str = ""  # 任务描述
     reward: str = ""  # 奖励
     accept_button_box: Optional[Rect] = None  # 接受按钮位置
+    action_text: str = ""  # 接受按钮文字：接受/放弃
     icon_box: Optional[Rect] = None  # 图标位置
 
 
@@ -100,6 +101,14 @@ class TaskHudRecognizer:
 
     # 任务类型黑名单（硬编码，不加入文件）
     TASK_TYPE_BLACKLIST = {"保护任务", "保护任务1"}
+    # 部分“混战任务”图标实际是采购/送货委托，详情页没有“进入战斗”。
+    # 只按描述排除这些非战斗任务，保留真正的混战关卡。
+    NON_COMBAT_DESCRIPTION_KEYWORDS = {
+        "购买",
+        "杂货铺",
+        "送往",
+        "送到",
+    }
 
     # 7个任务图标文件
     TASK_ICONS = [
@@ -198,6 +207,29 @@ class TaskHudRecognizer:
                 matched.append((task_type, icon_box))
         return matched
 
+    def recognize_tasks(self, context: Context, screenshot) -> List[HudTaskInfo]:
+        """识别当前任务板内可见的全部任务，不做类型/等级过滤。"""
+        task_list: List[HudTaskInfo] = []
+        for task_type, icon_box in self.recognize_all_task_icons(context, screenshot):
+            task_list.append(
+                self.recognize_task_info_by_icon(
+                    context, screenshot, task_type, icon_box
+                )
+            )
+        return task_list
+
+    @classmethod
+    def non_combat_keyword(cls, task: HudTaskInfo) -> Optional[str]:
+        """返回命中的非战斗描述关键词；没有命中时返回 None。"""
+        return next(
+            (
+                keyword
+                for keyword in cls.NON_COMBAT_DESCRIPTION_KEYWORDS
+                if keyword in task.task_description
+            ),
+            None,
+        )
+
     def recognize_task_info_by_icon(
         self, context: Context, screenshot, task_type: str, icon_box: Rect
     ) -> HudTaskInfo:
@@ -265,6 +297,7 @@ class TaskHudRecognizer:
         )
         if reco.hit and reco.best_result:
             task_info.accept_button_box = reco.best_result.box
+            task_info.action_text = reco.best_result.text.strip()
 
         return task_info
 
@@ -282,18 +315,10 @@ class TaskHudRecognizer:
             符合条件且评分最高的任务，或None
         """
         # 1. 扫描所有任务图标
-        matched_icons = self.recognize_all_task_icons(context, screenshot)
-        if not matched_icons:
+        task_list = self.recognize_tasks(context, screenshot)
+        if not task_list:
             logger.info("未找到任何任务图标")
             return None
-
-        # 2. 识别每个任务的信息
-        task_list: List[HudTaskInfo] = []
-        for task_type, icon_box in matched_icons:
-            task_info = self.recognize_task_info_by_icon(
-                context, screenshot, task_type, icon_box
-            )
-            task_list.append(task_info)
 
         # 3. 记录所有任务信息（调试用）
         for task in task_list:
@@ -327,6 +352,14 @@ class TaskHudRecognizer:
             # 检查任务类型黑名单（硬编码规则）
             if task.task_type in self.TASK_TYPE_BLACKLIST:
                 logger.debug(f"任务类型 {task.task_type} 在黑名单中，跳过")
+                continue
+
+            matched_keyword = self.non_combat_keyword(task)
+            if matched_keyword is not None:
+                logger.debug(
+                    f"任务 {task.task_name} 描述含非战斗关键词 "
+                    f"{matched_keyword}，跳过"
+                )
                 continue
 
             # 检查任务名称黑名单（从文件加载）

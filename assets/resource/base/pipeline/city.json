@@ -19,6 +19,18 @@
         "post_delay": 500,
         "timeout": 2000
     },
+    "FreeDayGoButton": {
+        "recognition": "OCR",
+        "expected": "前去",
+        "roi": [
+            450,
+            430,
+            210,
+            570
+        ],
+        "order_by": "Vertical",
+        "timeout": 2000
+    },
     "EnterCity_Confirm": {
         "recognition": "OCR",
         "expected": [
@@ -37,10 +49,7 @@
     },
     "TravelDialog": {
         "recognition": "OCR",
-        "expected": [
-            "提示",
-            "前往"
-        ],
+        "expected": "前往",
         "roi": [
             100,
             410,
@@ -94,24 +103,13 @@
         "timeout": 2000
     },
     "TravelDialog_ChooseSlow": {
-        "recognition": "OCR",
-        "expected": [
-            "航海",
-            "步行"
-        ],
-        "roi": [
-            200,
-            540,
-            250,
-            110
-        ],
-        "order_by": "Vertical",
-        "target": true,
-        "target_offset": [
-            260,
-            30,
-            0,
-            0
+        "doc": "调用前必须先命中 TravelDialog；固定点击上方步行/航海行的可用确认按钮",
+        "recognition": "DirectHit",
+        "target": [
+            470,
+            580,
+            140,
+            100
         ],
         "action": "Click",
         "post_delay": 2500,
@@ -224,6 +222,58 @@
         ],
         "duration": 1000,
         "post_delay": 1000,
+        "timeout": 2000
+    },
+    "FindCityTask_SwipeUp": {
+        "recognition": "DirectHit",
+        "action": "Swipe",
+        "begin": [
+            359,
+            704,
+            10,
+            10
+        ],
+        "end": [
+            356,
+            965,
+            10,
+            10
+        ],
+        "duration": 400,
+        "post_delay": 400,
+        "timeout": 1500
+    },
+    "FindCityTask_Refresh": {
+        "recognition": "OCR",
+        "expected": [
+            "刷新"
+        ],
+        "roi": [
+            520,
+            280,
+            170,
+            80
+        ],
+        "action": "Click",
+        "post_delay": 300,
+        "timeout": 2000,
+        "next": [
+            "FindCityTask_RefreshConfirm"
+        ]
+    },
+    "FindCityTask_RefreshConfirm": {
+        "recognition": "OCR",
+        "expected": [
+            "确定"
+        ],
+        "roi": [
+            400,
+            800,
+            190,
+            120
+        ],
+        "action": "Click",
+        "post_delay": 800,
         "timeout": 2000
     },
     "CheckTaskDetail_OCR": {

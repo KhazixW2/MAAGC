@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Any, Iterator, List, Optional, Set, Tuple
 
@@ -8,7 +9,25 @@ from maa.custom_action import CustomAction
 
 from utils import logger
 
-from .battle_grid import BattleGrid, Cell, CellType, GridScanner, ROWS, COLS
+from .battle_grid import (
+    BattleGrid,
+    Cell,
+    CellType,
+    GridScanner,
+    ROWS,
+    COLS,
+    CELL_HEIGHT,
+    CELL_WIDTH,
+)
+from .battle_world_map import (
+    ENEMY as WORLD_ENEMY,
+    ENVIRONMENT as WORLD_ENVIRONMENT,
+    SELF as WORLD_SELF,
+    BattleSessionRegistry,
+    BattleSessionState,
+    choose_move_candidate,
+    session_key,
+)
 
 
 @AgentServer.custom_action("AutoFightProcessor")
@@ -20,8 +39,14 @@ class AutoFightProcessor(CustomAction):
     次数，避免每局都触发 16 视野螺旋搜索的低性价比操作。
     """
 
-    MAX_ROUNDS = 40
-    ACTIVE_FROM_ROUND = 20
+    # A battle can legitimately last well beyond the old per-invocation limit
+    # of 40.  The session survives recovery calls; this high ceiling is only a
+    # final safety fuse, while the normal stop condition is a verified result.
+    MAX_ACTION_CYCLES = 300
+    MAX_NO_PROGRESS_CYCLES = 12
+    PASSIVE_ROUNDS = 20
+    ACTIVE_FROM_ROUND = PASSIVE_ROUNDS + 1
+    TEST_ACTIVE_FROM_ROUND_ENV = "MAAGC_TEST_ACTIVE_FROM_ROUND"
     MAX_SEARCH_SWIPES = 16
     MAX_STRAIGHT_SEARCH_SWIPES = 3
     # 右下角“回合：N”中的数字是常驻 HUD，不依赖一闪而过的回合提示。
@@ -32,16 +57,49 @@ class AutoFightProcessor(CustomAction):
     ROUND_CHANGE_THRESHOLD = 10.0
     ROUND_STABLE_THRESHOLD = 1.5
     ROUND_CONFIRM_FRAMES = 2
-    ACTION_SAFE_X = (30, 690)
+    # 最外侧约 90px 虽然还能点到状态条，但单位会挡住视野外的敌人，
+    # 黄色攻击框也容易被裁切；先平移镜头回到中部再做局部建图。
+    ACTION_SAFE_X = (90, 630)
     # 战斗区域实际延伸到 y=1160；地图位于下边界时，状态条会停在
     # y≈1150，仍在 HUD 上沿之外，可以安全点击。
     ACTION_SAFE_Y = (100, 1155)
     SELECT_CAPTURE_ATTEMPTS = 4
     SELECT_CAPTURE_DELAY = 0.12
+    MOVE_TARGET_MIN_ALLY_DISTANCE = 105
+    # 隐匿单位没有红色生命条，但底部“危险”开关仍会绘制其攻击覆盖区。
+    # 只接受至少接近一个 120x120 战斗格的大连通框，排除红旗、服装和
+    # 场景中的红色碎片；覆盖区只用于给出粗粒度追击方向，不冒充敌人坐标。
+    THREAT_REGION_MIN_BOX_AREA = 10000
+    THREAT_REGION_MIN_WIDTH = 90
+    THREAT_REGION_MIN_HEIGHT = 60
+    THREAT_DIRECTION_DEAD_ZONE = 60
+    # 威胁色块描在敌人可攻击的格子上，敌人的立绘会把自己所在格的
+    # 红色遮罩遮住。因此不能把整片红区的包围盒中心当作敌人；要找的是
+    # 被红色威胁格从四周包住的“锯齿/空洞”中心。
+    THREAT_ORIGIN_CORE_RADIUS = 20
+    THREAT_ORIGIN_RING_RADIUS = 105
+    THREAT_ORIGIN_SAMPLE_STEP = 12
+    THREAT_ORIGIN_MIN_DISTANCE_FROM_ALLY = 55
+    THREAT_ORIGIN_MIN_SCORE = 0.38
+    # 威胁覆盖层与战斗网格严格按 120px 对齐。敌人的立绘会遮住自身格的
+    # 中心，但仍会露出一部分红色；以此识别“锯齿中间”的具体敌人格。
+    THREAT_CELL_MIN_COVERAGE = 0.08
+    THREAT_CELL_MAX_COVERAGE = 0.70
+    THREAT_CELL_CENTER_MAX_COVERAGE = 0.10
+    THREAT_CELL_NEIGHBOR_MIN_COVERAGE = 0.20
+    THREAT_CELL_MIN_RED_NEIGHBORS = 2
+    ENEMY_OBSERVATION_MAX_AGE = 0
+    ENVIRONMENT_OBSERVATION_MAX_AGE = 2
 
     def __init__(self) -> None:
         super().__init__()
         self.scanner = GridScanner()
+        self._hidden_enemy_cell: Optional[Tuple[int, int]] = None
+        self._coarse_threat_direction: Optional[Tuple[int, int]] = None
+        self._last_confirmed_move_direction: Optional[Tuple[int, int]] = None
+        self._threat_overlay_safe = True
+        self._session: Optional[BattleSessionState] = None
+        self._session_key = ""
 
     # 大地图关卡下敌我可能长期不在同一视野。超过该回合数仍未观察到
     # 敌人方向记忆时，主动丢弃记忆并切回纯螺旋搜索，避免绕远路。
@@ -50,9 +108,18 @@ class AutoFightProcessor(CustomAction):
     def run(
         self, context: Context, _argv: CustomAction.RunArg
     ) -> CustomAction.RunResult:
-        """执行战斗循环；每个角色行动前后都丢弃旧地图并重新扫描。"""
-        round_count = 0
-        survival_mode = False
+        """执行整场战斗；恢复调用继续使用同一份地图和回合状态。"""
+        self._session_key = session_key(context)
+        self._session = BattleSessionRegistry.begin(self._session_key)
+        self._last_confirmed_move_direction = (
+            None
+            if self._session.last_move_direction is None
+            else (
+                self._session.last_move_direction[1],
+                self._session.last_move_direction[0],
+            )
+        )
+        self._threat_overlay_safe = True
         # 跨回合敌人方向记忆：上次成功搜索到的敌人相对原点的螺旋方向。
         # 我方按此方向推进若干回合，敌人可能也在接近，自然碰面。
         last_known_enemy_direction: Optional[Tuple[int, int]] = None
@@ -65,10 +132,32 @@ class AutoFightProcessor(CustomAction):
         if not self._set_threat_overlay(context, False):
             logger.warning("战斗入口未能确认危险覆盖层关闭，继续谨慎识别")
 
-        while round_count < self.MAX_ROUNDS:
+        passive_rounds = self.PASSIVE_ROUNDS
+        test_override = os.environ.get(self.TEST_ACTIVE_FROM_ROUND_ENV)
+        if test_override:
+            try:
+                active_from_round = max(1, int(test_override))
+                passive_rounds = active_from_round - 1
+                logger.warning(
+                    f"测试模式：第 {active_from_round} 回合直接主动出击"
+                )
+            except ValueError:
+                logger.warning(
+                    f"忽略非法测试主动回合覆盖: {test_override!r}"
+                )
+
+        logger.debug(
+            "恢复整场战斗会话: "
+            f"confirmed_rounds={self._session.confirmed_rounds}, "
+            f"world_origin={self._session.world.camera_origin}, "
+            f"explored={len(self._session.world.observed)}"
+        )
+
+        while self._session.action_cycles < self.MAX_ACTION_CYCLES:
             if context.tasker.stopping:
                 logger.info("任务执行被停止")
                 return CustomAction.RunResult(success=False)
+            self._session.action_cycles += 1
 
             # 跨回合敌人方向记忆：每个回合开头累加年龄，超期丢弃，
             # 避免方向记忆过期后让角色朝着错误方向走好几回合。
@@ -108,8 +197,26 @@ class AutoFightProcessor(CustomAction):
                 logger.error("回合建图前无法收起人物卡片，停止以避免盲目移动")
                 return CustomAction.RunResult(success=False)
 
-            round_count += 1
-            logger.debug(f"战斗循环 {round_count}：建立当前战场快照")
+            # 上一轮的威胁层若因动画/识别延迟未关闭，红色覆盖会污染本轮
+            # 的敌方与环境目标扫描。只有确认普通画面恢复后才允许建图。
+            if not self._set_threat_overlay(context, False):
+                logger.warning("回合建图前威胁层仍开启，本回合只结束等待恢复")
+                recovery_reference = self._screencap(context)
+                if recovery_reference is None:
+                    return CustomAction.RunResult(success=False)
+                recovery_result = self._end_round(
+                    context, recovery_reference, "威胁层恢复失败"
+                )
+                if recovery_result is not None:
+                    return CustomAction.RunResult(success=recovery_result)
+                self._wait_for_scene_settle(context, timeout=6.0)
+                continue
+
+            game_round = self._session.confirmed_rounds + 1
+            logger.debug(
+                f"战斗回合 {game_round} / 动作循环 "
+                f"{self._session.action_cycles}：建立当前战场快照"
+            )
             round_reference = self._screencap(context)
             if round_reference is None:
                 logger.error("建立回合快照失败")
@@ -119,26 +226,14 @@ class AutoFightProcessor(CustomAction):
             if battle_result is not None:
                 return CustomAction.RunResult(success=battle_result)
 
-            if not survival_mode:
-                survival_reco = context.run_recognition(
-                    "FightSurvivalObjective", round_reference
-                )
-                if survival_reco and survival_reco.hit:
-                    survival_mode = True
-                    logger.info(
-                        "识别到坚守回合目标，本场强制保持被动反击模式"
-                    )
-
-            game_round = round_count
-            # 严格按用户策略：前 ACTIVE_FROM_ROUND 轮全部被动，仅当游戏回合
-            # 真正达到阈值后切换为主动模式。早期 needs_reconnaissance 不再
-            # 触发主动出击（避免每局都做无谓的螺旋搜索）。
-            use_active_strategy = not survival_mode and (
-                game_round >= self.ACTIVE_FROM_ROUND
-            )
+            # 所有任务统一先完整结束 20 个回合。判断依据存放在整场会话中，
+            # AutoFightProcessor 被恢复逻辑再次调用时不会重新等待 20 回合。
+            use_active_strategy = self._session.confirmed_rounds >= passive_rounds
             if not use_active_strategy:
-                passive_mode = "坚守反击" if survival_mode else "被动反击"
-                logger.info(f"第 {game_round} 回合：{passive_mode}，结束回合")
+                logger.debug(
+                    f"第 {game_round} 回合：统一坚守反击 "
+                    f"({self._session.confirmed_rounds}/{passive_rounds})，结束回合"
+                )
                 passive_result = self._end_round(
                     context, round_reference, "被动阶段"
                 )
@@ -149,137 +244,174 @@ class AutoFightProcessor(CustomAction):
 
             round_grid = BattleGrid()
             self.scanner.scan_grid(round_grid, context, round_reference)
-            needs_reconnaissance = (
-                not round_grid.self_units or not round_grid.enemy_units
+            self._merge_world_view(
+                round_grid,
+                self._session.confirmed_rounds,
+                replace_visible=True,
             )
 
-            if game_round == self.ACTIVE_FROM_ROUND:
+            if self._session.confirmed_rounds == passive_rounds:
                 logger.info(
                     f"战斗到达第 {game_round} 回合仍未结束，"
                     "切换为主动搜索与追击模式"
                 )
 
-            # 流程可能从镜头偏离我方的视野恢复，也可能处于所有单位行动完的
-            # 半回合。两者都会表现为“当前画面没有完整蓝条 + 结束回合按钮存在”，
-            # 因而不能仅凭结束回合按钮直接判定行动耗尽。先补帧，再全图找回
-            # 我方；只有完整搜索仍找不到任何我方蓝条时，才允许结束回合。
-            if not round_grid.self_units:
-                for retry in range(1, 3):
-                    time.sleep(0.2)
-                    retry_img = self._screencap(context)
-                    if retry_img is None:
-                        continue
-                    retry_grid = BattleGrid()
-                    self.scanner.scan_grid(retry_grid, context, retry_img)
-                    if retry_grid.self_units:
-                        logger.info(f"第 {retry} 次补充取帧重新识别到我方单位")
-                        round_reference = retry_img
-                        round_grid = retry_grid
-                        break
+            world = self._session.world
+            if not world.has_allies() or not self._world_has_fresh_targets():
+                logger.info(
+                    "全局地图缺少我方或敌人，触发威胁层顺时针探索: "
+                    f"allies={world.has_allies()}, "
+                    f"enemies={self._world_has_fresh_targets()}"
+                )
+                self._explore_world_clockwise(
+                    context, self._session.confirmed_rounds
+                )
 
-            if not round_grid.self_units:
-                recovered_grid = self._search_for_allies_and_stay(context)
-                if recovered_grid is None:
-                    latest_img = self._screencap(context)
-                    if (
-                        latest_img is not None
-                        and context.run_recognition(
-                            "FightEndRound", latest_img
-                        ).hit
-                    ):
-                        logger.warning(
-                            f"已扫描最多 {self.MAX_SEARCH_SWIPES} 个相邻视野，"
-                            "仍未重新找到我方单位；按已耗尽半回合恢复"
-                        )
-                        result = context.run_task("FightEndRound")
-                        if not self._task_result_has_hit(
-                            result, {"FightEndRound"}
-                        ):
-                            logger.error("找回我方失败后的结束回合点击失败")
-                            return CustomAction.RunResult(success=False)
-                        self._wait_for_round_change(
-                            context, round_reference, timeout=6.0
-                        )
-                        self._wait_for_scene_settle(context, timeout=6.0)
-                        continue
-                    logger.error(
-                        f"已扫描最多 {self.MAX_SEARCH_SWIPES} 个相邻视野，"
-                        "仍未重新找到我方单位"
-                    )
-                    return CustomAction.RunResult(success=False)
-                round_grid = recovered_grid
-                round_reference = self._screencap(context)
-                if round_reference is None:
-                    logger.error("找回我方视野后建立回合快照失败")
-                    return CustomAction.RunResult(success=False)
-
-            round_grid, recentered = self._recenter_edge_allies(
-                context, round_grid
+            focused = self._focus_known_ally(
+                context, self._session.confirmed_rounds
             )
-            if recentered:
-                round_reference = self._screencap(context)
-                if round_reference is None:
-                    logger.error("居中我方视野后建立回合快照失败")
-                    return CustomAction.RunResult(success=False)
+            if focused is None and (
+                not world.has_allies() or not self._world_has_fresh_targets()
+            ):
+                self._explore_world_clockwise(
+                    context, self._session.confirmed_rounds
+                )
+                focused = self._focus_known_ally(
+                    context, self._session.confirmed_rounds
+                )
 
-            pursuit_direction: Optional[Tuple[int, int]] = None
-            environment_mode = False
-            if not round_grid.enemy_units and round_grid.self_units:
-                local_environment = list(round_grid.environment_units)
-                if local_environment:
-                    environment_mode = True
-                    logger.info(
-                        "当前视野已确认祭坛/石碑类环境目标，"
-                        f"直接行动，候选={len(local_environment)}"
+            if focused is None or (
+                not self._world_has_fresh_targets()
+                and self._coarse_threat_direction is None
+            ):
+                no_progress = self._session.record_no_progress()
+                logger.warning(
+                    "主动阶段完整建图后仍无法同时定位我方和敌人，"
+                    f"本回合等待敌人移动后重试 ({no_progress}/"
+                    f"{self.MAX_NO_PROGRESS_CYCLES})"
+                )
+                if no_progress >= self.MAX_NO_PROGRESS_CYCLES:
+                    logger.error("连续多轮全局建图没有新增有效战斗目标")
+                    return CustomAction.RunResult(success=False)
+                latest = self._screencap(context)
+                if latest is None:
+                    return CustomAction.RunResult(success=False)
+                wait_result = self._end_round(context, latest, "全局建图等待")
+                if wait_result is not None:
+                    return CustomAction.RunResult(success=wait_result)
+                self._wait_for_scene_settle(context, timeout=6.0)
+                continue
+
+            round_grid, round_reference = focused
+            round_grid, recentered, recentered_img = self._recenter_edge_allies(
+                context,
+                round_grid,
+                self._session.confirmed_rounds,
+            )
+            if recentered and recentered_img is not None:
+                round_reference = recentered_img
+            if not round_grid.enemy_units:
+                refreshed = self._refresh_local_threat_map(
+                    context, self._session.confirmed_rounds
+                )
+                if not refreshed or not self._threat_overlay_safe:
+                    logger.warning(
+                        "当前我方视野无法安全刷新威胁层，本回合只结束等待"
                     )
-                elif last_known_enemy_direction is not None:
-                    # 陈旧方向记忆只能在「当前视野还能继续推进」时使用。
-                    # bot 已在 col=0 / col=COLS-1 / row=0 / row=ROWS-1
-                    # 时如果还按记忆方向走，会因为同列格子之间血条 X 坐标
-                    # 噪声而在两三个格子间反复横跳。地图其实还能往该方向
-                    # 滑动，必须先 pan camera 再决定方向。
-                    if self._ally_at_grid_edge(
-                        allies, last_known_enemy_direction
-                    ):
-                        logger.info(
-                            f"陈旧方向记忆 {last_known_enemy_direction} "
-                            f"（age={last_known_enemy_age}）"
-                            "已撞当前视野边界，丢弃并触发螺旋搜索刷新方向"
+                    wait_result = self._end_round(
+                        context, round_reference, "局部威胁刷新失败"
+                    )
+                    if wait_result is not None:
+                        return CustomAction.RunResult(success=wait_result)
+                    self._wait_for_scene_settle(context, timeout=6.0)
+                    continue
+                normal_img = self._screencap(context)
+                if normal_img is None:
+                    return CustomAction.RunResult(success=False)
+                round_grid = self._scan_world_view(
+                    context,
+                    normal_img,
+                    self._session.confirmed_rounds,
+                    overlay_open=False,
+                )
+                round_reference = normal_img
+
+            # A precisely identified hollow threat cell can itself sit at a
+            # viewport corner even though no normal red bar is visible.  Pull
+            # that world point inward with the matching diagonal nudge before
+            # selecting a unit, then rebuild both normal and threat views.
+            _, known_hidden_target, _ = self._world_pursuit(round_grid)
+            if known_hidden_target is not None and not round_grid.enemy_units:
+                (
+                    round_grid,
+                    hidden_recentered,
+                    hidden_recentered_img,
+                ) = self._recenter_edge_allies(
+                    context,
+                    round_grid,
+                    self._session.confirmed_rounds,
+                    known_target=known_hidden_target,
+                )
+                if hidden_recentered and hidden_recentered_img is not None:
+                    round_reference = hidden_recentered_img
+                    if not round_grid.enemy_units:
+                        if not self._refresh_local_threat_map(
+                            context, self._session.confirmed_rounds
+                        ):
+                            logger.warning("隐藏敌人格重定位后威胁层刷新失败")
+                        normal_img = self._screencap(context)
+                        if normal_img is None:
+                            return CustomAction.RunResult(success=False)
+                        round_grid = self._scan_world_view(
+                            context,
+                            normal_img,
+                            self._session.confirmed_rounds,
+                            overlay_open=False,
                         )
-                        last_known_enemy_direction = None
-                        last_known_enemy_age = 0
-                    else:
-                        pursuit_direction = last_known_enemy_direction
-                        logger.info(
-                            f"沿用敌人方向记忆 {pursuit_direction} "
-                            f"（age={last_known_enemy_age}），"
-                            "本回合直接推进"
-                        )
-                if (
-                    last_known_enemy_direction is None
-                    and pursuit_direction is None
-                    and not environment_mode
-                    and not round_grid.enemy_units
+                        round_reference = normal_img
+
+            if (
+                not self._world_has_fresh_targets()
+                and self._coarse_threat_direction is None
+            ):
+                self._explore_world_clockwise(
+                    context, self._session.confirmed_rounds
+                )
+                focused = self._focus_known_ally(
+                    context, self._session.confirmed_rounds
+                )
+                if focused is None or (
+                    not self._world_has_fresh_targets()
+                    and self._coarse_threat_direction is None
                 ):
-                    search_result = self._search_for_enemies(context)
-                    if search_result is None:
-                        logger.error(
-                            f"已扫描当前视野及最多 {self.MAX_SEARCH_SWIPES} "
-                            "个相邻视野，仍未找到人物敌人或环境目标；"
-                            "且无跨回合方向记忆，本场无法继续推进"
-                        )
-                        return CustomAction.RunResult(success=False)
-                    (
-                        pursuit_direction,
-                        round_grid,
-                        environment_mode,
-                    ) = search_result
-                    # 成功搜索到敌人方向就刷新记忆，后续回合直接按方向推进。
-                    last_known_enemy_direction = pursuit_direction
-                    last_known_enemy_age = 0
-                    logger.info(
-                        f"刷新敌人方向记忆: {last_known_enemy_direction}"
+                    no_progress = self._session.record_no_progress()
+                    logger.warning(
+                        "局部威胁刷新后敌人位置失效，等待下一回合再探索 "
+                        f"({no_progress}/{self.MAX_NO_PROGRESS_CYCLES})"
                     )
+                    latest = self._screencap(context)
+                    if latest is None:
+                        return CustomAction.RunResult(success=False)
+                    wait_result = self._end_round(
+                        context, latest, "敌人位置失效"
+                    )
+                    if wait_result is not None:
+                        return CustomAction.RunResult(success=wait_result)
+                    self._wait_for_scene_settle(context, timeout=6.0)
+                    continue
+                round_grid, round_reference = focused
+
+            pursuit_direction, hidden_enemy_cell, environment_mode = (
+                self._world_pursuit(round_grid)
+            )
+            last_known_enemy_direction = pursuit_direction
+            last_known_enemy_age = 0
+            logger.debug(
+                "全局地图规划目标: "
+                f"direction={pursuit_direction}, "
+                f"local_target={hidden_enemy_cell}, "
+                f"environment={environment_mode}"
+            )
 
             unsafe_allies = [
                 cell
@@ -287,15 +419,17 @@ class AutoFightProcessor(CustomAction):
                 if not self._ally_is_actionable(cell)
             ]
             if unsafe_allies:
-                logger.info(
+                logger.debug(
                     f"忽略 {len(unsafe_allies)} 名位于屏幕边缘/系统 UI 区域的我方单位"
                 )
+            # 全图搜索可能已经平移镜头并替换 round_grid，行动坐标必须从
+            # 搜索返回的新快照重新生成，不能沿用搜索前的格子位置。
             allies = [
                 (cell.row, cell.col)
                 for cell in round_grid.self_units
                 if self._ally_is_actionable(cell)
             ]
-            logger.info(
+            logger.debug(
                 f"战场识别: {COLS}x{ROWS}, 我方={len(allies)}, "
                 f"人物敌方={len(round_grid.enemy_units)}, "
                 f"环境目标={len(round_grid.environment_units)}"
@@ -328,6 +462,7 @@ class AutoFightProcessor(CustomAction):
 
             used_cells: Set[Tuple[int, int]] = set()
             round_advanced = False
+            round_had_action = False
             for ally_index, (planned_row, planned_col) in enumerate(allies):
                 if context.tasker.stopping:
                     logger.info("任务执行被停止")
@@ -346,7 +481,13 @@ class AutoFightProcessor(CustomAction):
 
                 current_grid = BattleGrid()
                 self.scanner.scan_grid(current_grid, context, current_img)
+                self._merge_world_view(
+                    current_grid,
+                    self._session.confirmed_rounds,
+                    replace_visible=True,
+                )
                 action_pursuit = pursuit_direction
+                action_hidden_enemy_cell = hidden_enemy_cell
                 current_targets = list(current_grid.enemy_units)
                 if not current_targets and current_grid.environment_units:
                     # 同一个祭坛的红条会随受击/遮挡帧在“扁平人物条”和
@@ -354,7 +495,7 @@ class AutoFightProcessor(CustomAction):
                     # 就统一作为目标，不因分类抖动重新启动全图搜索。
                     current_targets = list(current_grid.environment_units)
                     environment_mode = True
-                    logger.info(
+                    logger.debug(
                         "当前动作帧将祭坛/石碑类红色目标纳入候选，"
                         f"数量={len(current_targets)}"
                     )
@@ -365,10 +506,20 @@ class AutoFightProcessor(CustomAction):
                     # 角色一旦移动，外层会立即结束本回合并重新建图。
                     current_targets = list(round_grid.environment_units)
                     if current_targets:
-                        logger.info(
+                        logger.debug(
                             "选人前环境目标短暂被遮挡，沿用本回合搜索帧"
                             f"已确认的 {len(current_targets)} 个目标"
                         )
+                if (
+                    not current_targets
+                    and action_pursuit is None
+                    and last_known_enemy_direction is not None
+                ):
+                    action_pursuit = last_known_enemy_direction
+                    logger.debug(
+                        "当前动作帧仍无可见敌人，沿用本回合隐匿/远端方向 "
+                        f"{action_pursuit}"
+                    )
                 if not current_targets and action_pursuit is None:
                     if environment_mode:
                         logger.info(
@@ -376,23 +527,17 @@ class AutoFightProcessor(CustomAction):
                             "跳过本角色并在下一回合重新建图"
                         )
                         continue
-                    search_result = self._search_for_enemies(context)
-                    if search_result is None:
-                        logger.error(
-                            "角色行动前完成全地图搜索，仍未找到敌人；"
-                            "停止以避免无目标移动"
-                        )
-                        return CustomAction.RunResult(success=False)
                     (
                         action_pursuit,
-                        current_grid,
+                        action_hidden_enemy_cell,
                         environment_mode,
-                    ) = search_result
-                    current_targets = list(
-                        current_grid.environment_units
-                        if environment_mode
-                        else current_grid.enemy_units
-                    )
+                    ) = self._world_pursuit(current_grid)
+                    if action_pursuit is None:
+                        logger.info(
+                            "当前角色帧没有可用全局目标，跳过角色；"
+                            "下一回合重新触发探索"
+                        )
+                        continue
 
                 current_ally = self._nearest_available_ally(
                     current_grid,
@@ -407,7 +552,7 @@ class AutoFightProcessor(CustomAction):
                     continue
 
                 used_cells.add((current_ally.row, current_ally.col))
-                logger.info(
+                logger.debug(
                     f"选择角色 {ally_index}: grid=({current_ally.row},{current_ally.col})"
                 )
                 select_x, select_y = current_ally.safe_click_point()
@@ -450,6 +595,7 @@ class AutoFightProcessor(CustomAction):
                     selected_img,
                     round_reference,
                     action_pursuit,
+                    action_hidden_enemy_cell,
                 )
                 if moved_to is not None:
                     # 移动后下一张截图里的同一角色已经换了格子。把新位置也
@@ -468,6 +614,9 @@ class AutoFightProcessor(CustomAction):
                     logger.error("动作完成后无法收起人物卡片，停止后续角色行动")
                     return CustomAction.RunResult(success=False)
 
+                if acted:
+                    round_had_action = True
+
                 if action_advanced_round:
                     logger.info("动作后常驻回合数字已变化，游戏已自动进入下一回合")
                     round_advanced = True
@@ -485,10 +634,21 @@ class AutoFightProcessor(CustomAction):
                 self._wait_for_scene_settle(context, timeout=6.0)
                 continue
 
+            if not round_had_action:
+                no_progress = self._session.record_no_progress()
+                logger.warning(
+                    "主动回合没有确认任何攻击或移动: "
+                    f"{no_progress}/{self.MAX_NO_PROGRESS_CYCLES}"
+                )
+                if no_progress >= self.MAX_NO_PROGRESS_CYCLES:
+                    logger.error("连续主动回合没有可验证动作，停止进入外层恢复")
+                    return CustomAction.RunResult(success=False)
+
             # 最后一名角色行动后，游戏可能自行结束我方回合。留一个短暂
             # 宽限期，仅当常驻回合数字没有变化时才点击结束回合。
             if self._wait_for_round_change(context, round_reference, timeout=1.5):
                 logger.info("检测到自动换回合，跳过结束回合按钮")
+                self._record_round_advance("角色行动后自动换回合")
                 self._wait_for_scene_settle(context, timeout=6.0)
                 continue
 
@@ -499,7 +659,9 @@ class AutoFightProcessor(CustomAction):
                 return CustomAction.RunResult(success=end_result)
             self._wait_for_scene_settle(context, timeout=6.0)
 
-        logger.error(f"战斗达到最大回合数 {self.MAX_ROUNDS}，停止任务")
+        logger.error(
+            f"战斗达到安全动作循环上限 {self.MAX_ACTION_CYCLES}，停止任务"
+        )
         return CustomAction.RunResult(success=False)
 
     def _decide_and_act(
@@ -510,6 +672,7 @@ class AutoFightProcessor(CustomAction):
         before_img: Any,
         round_reference: Any,
         pursuit_direction: Optional[Tuple[int, int]],
+        hidden_enemy_cell: Optional[Tuple[int, int]],
     ) -> Tuple[bool, Optional[Tuple[int, int]], bool]:
         """返回 ``(是否生效, 移动后的格子, 是否已经换回合)``。"""
         attack_targets = [
@@ -517,6 +680,8 @@ class AutoFightProcessor(CustomAction):
             for cell in grid.enemy_units
             if cell.is_attackable and not cell.is_moveable
         ]
+        if not attack_targets:
+            attack_targets = self._promote_occluded_adjacent_targets(grid, ally)
         conflicted_targets = [
             cell
             for cell in grid.enemy_units
@@ -528,7 +693,7 @@ class AutoFightProcessor(CustomAction):
                 + str([(cell.row, cell.col) for cell in conflicted_targets])
             )
 
-        logger.info(
+        logger.debug(
             "可攻击敌人位置(E1): "
             + str([(cell.row, cell.col) for cell in attack_targets])
         )
@@ -549,6 +714,8 @@ class AutoFightProcessor(CustomAction):
                 target,
             )
             if accepted or advanced:
+                if accepted and self._session is not None:
+                    self._session.record_progress()
                 return accepted, None, advanced
 
             logger.warning(
@@ -569,6 +736,46 @@ class AutoFightProcessor(CustomAction):
                 return False, None, False
             before_img, grid, _ = fallback_state
 
+        hidden_target = (
+            grid.get_cell(*hidden_enemy_cell)
+            if hidden_enemy_cell is not None
+            else None
+        )
+        if (
+            not attack_targets
+            and hidden_target is not None
+            and self._is_adjacent_cell(ally, hidden_target)
+        ):
+            # 隐匿敌人没有红色血条，人物立绘还可能遮住黄色攻击角标。
+            # 这时 A* 会正确判断我方已经站在攻击环，却无法从 E1 得到
+            # 攻击目标。锯齿中心来自当前威胁层、且与所选我方八方向相邻
+            # 时，按游戏的点对点规则直接双击该格；远端地图记忆不走此
+            # 分支，避免把过期坐标当成可点击敌人。
+            logger.info(
+                "相邻锯齿威胁中心虽无黄色角标，直接双击攻击格子: "
+                f"({hidden_target.row}, {hidden_target.col})"
+            )
+            if not self._click_cell(context, hidden_target, "相邻威胁中心攻击"):
+                return False, None, False
+            accepted, advanced = self._verify_action_result(
+                context,
+                before_img,
+                round_reference,
+                "相邻威胁中心攻击",
+                ally,
+                hidden_target,
+            )
+            if accepted or advanced:
+                if accepted and self._session is not None:
+                    self._session.record_progress()
+                return accepted, None, advanced
+            logger.warning(
+                "相邻威胁中心双击未得到胜利、回合变化或血条变化确认，"
+                "取消选择后下回合重建威胁图"
+            )
+            self._cancel_selection(context)
+            return False, None, False
+
         move_targets = [
             cell
             for row in grid.cells
@@ -577,7 +784,8 @@ class AutoFightProcessor(CustomAction):
             and not cell.is_attackable
             and cell.cell_type == CellType.NONE
         ]
-        logger.info(
+        move_targets = self._without_ally_occlusion(move_targets, ally)
+        logger.debug(
             "可移动空白位置(2): "
             + str([(cell.row, cell.col) for cell in move_targets])
         )
@@ -591,7 +799,72 @@ class AutoFightProcessor(CustomAction):
                 )
             return False, None, False
 
-        if grid.enemy_units:
+        target: Optional[Cell] = None
+        used_world_plan = False
+        if self._session is not None:
+            world = self._session.world
+            ally_world = world.local_to_world(ally.row, ally.col)
+            current_local_targets = [
+                (cell.row, cell.col) for cell in grid.enemy_units
+            ]
+            if current_local_targets:
+                world_targets = [
+                    world.local_to_world(row, col)
+                    for row, col in current_local_targets
+                ]
+            elif hidden_enemy_cell is not None:
+                world_targets = [world.local_to_world(*hidden_enemy_cell)]
+            else:
+                fresh_enemies, fresh_environment = self._fresh_world_targets()
+                world_targets = fresh_enemies or fresh_environment
+
+            # One action follows one current target.  Feeding every remembered
+            # threat point into the attack-ring planner made the goal switch
+            # between stale points and produced short orbits around the enemy.
+            if world_targets:
+                nearest_target = min(
+                    world_targets,
+                    key=lambda point: (
+                        max(
+                            abs(point[0] - ally_world[0]),
+                            abs(point[1] - ally_world[1]),
+                        ),
+                        point,
+                    ),
+                )
+                world_targets = [nearest_target]
+            candidate_cells = {
+                world.local_to_world(cell.row, cell.col): cell
+                for cell in move_targets
+            }
+            if world_targets:
+                used_world_plan = True
+                selected_world = choose_move_candidate(
+                    ally_world,
+                    list(candidate_cells),
+                    world_targets,
+                    blocked=world.blocked,
+                    explored=world.observed,
+                    last_direction=self._session.last_move_direction,
+                    recent_positions=self._session.recent_move_points,
+                )
+                if selected_world is not None:
+                    target = candidate_cells[selected_world]
+                    logger.debug(
+                        "八方向 A* 选择本回合落点: "
+                        f"ally={ally_world}, target={selected_world}, "
+                        f"enemy={world_targets[0]}"
+                    )
+
+        if target is not None:
+            pass
+        elif used_world_plan:
+            logger.info(
+                "我方已在目标攻击环或没有严格缩短路径的落点，"
+                "本回合不绕行，等待攻击框/敌方位置刷新"
+            )
+            return False, None, False
+        elif grid.enemy_units:
             nearest_enemy = min(
                 grid.enemy_units,
                 key=lambda enemy: self._screen_distance(enemy, ally, "attack"),
@@ -607,6 +880,13 @@ class AutoFightProcessor(CustomAction):
                 direction_y,
                 nearest_enemy,
             )
+            if not self._move_reduces_enemy_distance(
+                target, ally, nearest_enemy
+            ):
+                logger.info(
+                    "局部图没有直接缩短敌我距离的蓝格，"
+                    "选择代价最小的八方向绕障格"
+                )
             logger.info(
                 "当前视野有敌人但没有可信攻击目标，"
                 f"向敌人 ({nearest_enemy.row}, {nearest_enemy.col}) "
@@ -614,23 +894,59 @@ class AutoFightProcessor(CustomAction):
             )
         elif pursuit_direction is not None:
             direction_x, direction_y = pursuit_direction
+            hidden_target = (
+                grid.get_cell(*hidden_enemy_cell)
+                if hidden_enemy_cell is not None
+                else None
+            )
+            if hidden_target is not None and hidden_target.is_attackable:
+                logger.info(
+                    "锯齿威胁中心已进入攻击范围，直接攻击格子: "
+                    f"({hidden_target.row}, {hidden_target.col})"
+                )
+                if not self._click_cell(context, hidden_target, "威胁中心攻击"):
+                    return False, None, False
+                accepted, advanced = self._verify_action_result(
+                    context,
+                    before_img,
+                    round_reference,
+                    "威胁中心攻击",
+                    ally,
+                    hidden_target,
+                )
+                if accepted or advanced:
+                    if accepted and self._session is not None:
+                        self._session.record_progress()
+                    return accepted, None, advanced
+                logger.warning("威胁中心攻击未被游戏接受，取消选择后下回合重试")
+                self._cancel_selection(context)
+                return False, None, False
+            coarse_move_targets = self._coarse_move_candidates(
+                move_targets, ally
+            )
+            if not coarse_move_targets:
+                return False, None, False
             target = self._farthest_move_target(
-                move_targets,
+                coarse_move_targets,
                 ally,
                 direction_x,
                 direction_y,
+                hidden_target,
             )
-            ally_x, ally_y = ally.safe_click_point()
-            target_x, target_y = target.action_click_point("move")
             projection = (
-                (target_x - ally_x) * direction_x
-                + (target_y - ally_y) * direction_y
+                (target.col - ally.col) * direction_x
+                + (target.row - ally.row) * direction_y
             )
-            if projection <= 0:
-                logger.warning(
-                    f"移动范围内没有朝远端敌人方向 {pursuit_direction} 的格子"
+            if projection < 0:
+                logger.info(
+                    f"直达方向 {pursuit_direction} 被障碍阻挡，"
+                    "按局部图选择代价最小的八方向绕障格"
                 )
-                return False, None, False
+            if projection == 0:
+                logger.info(
+                    f"直达方向 {pursuit_direction} 被障碍阻挡，"
+                    "选择八方向中的垂直绕行格"
+                )
             logger.info(
                 f"当前视野无敌人，按远端方向 {pursuit_direction} "
                 f"选择投影={projection} 的移动格"
@@ -649,13 +965,241 @@ class AutoFightProcessor(CustomAction):
             target,
         )
         destination = (target.row, target.col) if accepted else None
+        if accepted:
+            self._last_confirmed_move_direction = self._grid_direction(
+                ally, target
+            )
+            if self._session is not None:
+                origin_world = self._session.world.local_to_world(
+                    ally.row, ally.col
+                )
+                target_world = self._session.world.local_to_world(
+                    target.row, target.col
+                )
+                row_direction = (
+                    0
+                    if target_world[0] == origin_world[0]
+                    else (1 if target_world[0] > origin_world[0] else -1)
+                )
+                col_direction = (
+                    0
+                    if target_world[1] == origin_world[1]
+                    else (1 if target_world[1] > origin_world[1] else -1)
+                )
+                self._session.last_move_direction = (
+                    row_direction,
+                    col_direction,
+                )
+                self._session.world.record_predicted_move(
+                    origin_world,
+                    target_world,
+                    self._session.confirmed_rounds,
+                )
+                self._session.record_move_point(target_world)
+                self._session.record_progress()
+            logger.debug(
+                "记录局部路径移动方向: "
+                f"{self._last_confirmed_move_direction}"
+            )
         return accepted, destination, advanced
+
+    @staticmethod
+    def _is_adjacent_cell(first: Cell, second: Cell) -> bool:
+        """八方向相邻，不把同格或远端世界地图记忆当作可攻击目标。"""
+        row_distance = abs(first.row - second.row)
+        col_distance = abs(first.col - second.col)
+        return max(row_distance, col_distance) == 1
+
+    def _without_immediate_backtrack(
+        self, move_targets: List[Cell], ally: Cell
+    ) -> List[Cell]:
+        """排除上一移动方向后方的半平面，避免下一步大角度掉头。"""
+        last_direction = self._last_confirmed_move_direction
+        if last_direction is None:
+            return move_targets
+        candidates = [
+            cell
+            for cell in move_targets
+            if (
+                self._grid_direction(ally, cell)[0] * last_direction[0]
+                + self._grid_direction(ally, cell)[1] * last_direction[1]
+                >= 0
+            )
+        ]
+        removed = len(move_targets) - len(candidates)
+        if removed:
+            logger.debug(
+                f"局部路径排除 {removed} 个位于上一方向 "
+                f"{last_direction} 反向半平面的蓝格"
+            )
+        if candidates:
+            return candidates
+        logger.info("局部图只剩大角度回退格，本回合不移动并等待地图变化")
+        return []
+
+    def _coarse_move_candidates(
+        self, move_targets: List[Cell], ally: Cell
+    ) -> List[Cell]:
+        """Constrain direction-only pursuit without blocking real A* paths.
+
+        A coarse threat direction can flip after every enemy turn.  Applying
+        it blindly produced a three-cell orbit because the next move was often
+        the exact reverse of the previous one.  Reject that immediate reversal
+        for one turn and prefer cells not visited in the latest short history.
+        Precise world-target A* planning intentionally bypasses this helper so
+        it can still backtrack around a real obstacle when required.
+        """
+
+        candidates = self._without_immediate_backtrack(move_targets, ally)
+        if not candidates:
+            # Wait one turn, then permit a reversal if the refreshed threat
+            # direction still requires it.  This breaks ping-pong movement
+            # without permanently forbidding a necessary retreat.
+            self._last_confirmed_move_direction = None
+            if self._session is not None:
+                self._session.last_move_direction = None
+            return []
+
+        if self._session is None or not self._session.recent_move_points:
+            return candidates
+        recent = set(self._session.recent_move_points[-4:])
+        fresh = [
+            cell
+            for cell in candidates
+            if self._session.world.local_to_world(cell.row, cell.col)
+            not in recent
+        ]
+        if fresh:
+            logger.debug(
+                f"粗方向追击优先 {len(fresh)} 个近期未访问移动格"
+            )
+            return fresh
+        return candidates
+
+    def _without_ally_occlusion(
+        self, move_targets: List[Cell], ally: Cell
+    ) -> List[Cell]:
+        """排除落在当前大体型立绘上的蓝格中心，避免点击被角色截获。"""
+        ally_x, ally_y = ally.safe_click_point()
+        min_distance_sq = self.MOVE_TARGET_MIN_ALLY_DISTANCE ** 2
+        candidates = []
+        for cell in move_targets:
+            target_x, target_y = cell.action_click_point("move")
+            if (target_x - ally_x) ** 2 + (target_y - ally_y) ** 2 >= min_distance_sq:
+                candidates.append(cell)
+        removed = len(move_targets) - len(candidates)
+        if removed:
+            logger.debug(f"局部路径排除 {removed} 个被我方立绘覆盖的近邻蓝格")
+        return candidates or move_targets
+
+    @staticmethod
+    def _grid_direction(first: Cell, second: Cell) -> Tuple[int, int]:
+        delta_col = second.col - first.col
+        delta_row = second.row - first.row
+        return (
+            1 if delta_col > 0 else -1 if delta_col < 0 else 0,
+            1 if delta_row > 0 else -1 if delta_row < 0 else 0,
+        )
 
     @staticmethod
     def _screen_distance(first: Cell, second: Cell, action: str) -> int:
         first_x, first_y = first.action_click_point(action)
         second_x, second_y = second.safe_click_point()
         return (first_x - second_x) ** 2 + (first_y - second_y) ** 2
+
+    def _promote_occluded_adjacent_targets(
+        self, grid: BattleGrid, ally: Cell
+    ) -> List[Cell]:
+        """Recover an adjacent enemy whose yellow target frame is occluded.
+
+        Large altars and two overlapping units can leave only a few yellow
+        corner fragments on the enemy cell.  A selected frame that still has
+        other attack-range cells proves the yellow layer is active; combined
+        with a current real red status bar in an adjacent cell this is enough
+        to attempt the user's normal double-click attack.  Result verification
+        still rejects a click that the game does not accept.
+        """
+
+        has_attack_layer = any(cell.is_attackable for cell in grid)
+        if not has_attack_layer:
+            return []
+        promoted: List[Cell] = []
+        for enemy in grid.enemy_units:
+            if enemy.is_attackable or enemy.is_moveable:
+                continue
+            if max(abs(enemy.row - ally.row), abs(enemy.col - ally.col)) > 1:
+                continue
+            center_x, bar_y = (
+                enemy.target_center
+                if enemy.target_center != (0, 0)
+                else enemy.safe_click_point()
+            )
+            enemy.is_attackable = True
+            enemy.attack_center = (
+                center_x,
+                max(1, bar_y - self.scanner.ATTACK_MARKER_Y_OFFSET),
+            )
+            promoted.append(enemy)
+        if promoted:
+            logger.info(
+                "相邻敌人攻击框被本体遮挡，按红条与攻击层恢复目标: "
+                + str([(cell.row, cell.col) for cell in promoted])
+            )
+        return promoted
+
+    @staticmethod
+    def _move_reduces_enemy_distance(
+        target: Cell, ally: Cell, enemy: Cell
+    ) -> bool:
+        """只接受真正接近敌人的落点，屏蔽垂直/水平噪声造成的两格往返。"""
+        ally_x, ally_y = ally.safe_click_point()
+        target_x, target_y = target.action_click_point("move")
+        enemy_x, enemy_y = enemy.safe_click_point()
+        before = (ally_x - enemy_x) ** 2 + (ally_y - enemy_y) ** 2
+        after = (target_x - enemy_x) ** 2 + (target_y - enemy_y) ** 2
+        return after < before
+
+    @classmethod
+    def _edge_recenter_direction(
+        cls,
+        cells: Any,
+        *,
+        x_bounds: Optional[Tuple[int, int]] = None,
+        y_bounds: Optional[Tuple[int, int]] = None,
+    ) -> Optional[Tuple[int, int]]:
+        """Return a cardinal or diagonal pan that pulls edge units inward."""
+
+        if isinstance(cells, Cell):
+            cells = [cells]
+        cells = list(cells)
+        if not cells:
+            return None
+        x_min, x_max = x_bounds or cls.ACTION_SAFE_X
+        y_min, y_max = y_bounds or cls.ACTION_SAFE_Y
+
+        left_overflow = max(
+            (x_min - cell.safe_click_point()[0] for cell in cells), default=0
+        )
+        right_overflow = max(
+            (cell.safe_click_point()[0] - x_max for cell in cells), default=0
+        )
+        top_overflow = max(
+            (y_min - cell.safe_click_point()[1] for cell in cells), default=0
+        )
+        bottom_overflow = max(
+            (cell.safe_click_point()[1] - y_max for cell in cells), default=0
+        )
+        direction_x = (
+            -1
+            if left_overflow > max(0, right_overflow)
+            else (1 if right_overflow > 0 else 0)
+        )
+        direction_y = (
+            -1
+            if top_overflow > max(0, bottom_overflow)
+            else (1 if bottom_overflow > 0 else 0)
+        )
+        return (direction_x, direction_y) if direction_x or direction_y else None
 
     @staticmethod
     def _farthest_move_target(
@@ -681,7 +1225,7 @@ class AutoFightProcessor(CustomAction):
                 + (ally_y - enemy_point[1]) ** 2
             )
 
-            def approach_score(cell: Cell) -> Tuple[int, int, int]:
+            def approach_score(cell: Cell) -> Tuple[int, int, int, int]:
                 cell_x, cell_y = cell.action_click_point("move")
                 delta_x = cell_x - ally_x
                 delta_y = cell_y - ally_y
@@ -691,7 +1235,14 @@ class AutoFightProcessor(CustomAction):
                 )
                 projection = delta_x * direction_x + delta_y * direction_y
                 displacement = delta_x * delta_x + delta_y * delta_y
-                return enemy_distance, -projection, -displacement
+                # 同样接近敌人时，选择仍位于敌人这一侧的格子，不能因追击
+                # 投影更大而越过锯齿中心，导致在敌人两侧反复横跳。
+                overshot = int(
+                    (cell_x - enemy_point[0]) * direction_x
+                    + (cell_y - enemy_point[1]) * direction_y
+                    > 0
+                )
+                return enemy_distance, overshot, -projection, -displacement
 
             closer_targets = [
                 cell
@@ -701,13 +1252,32 @@ class AutoFightProcessor(CustomAction):
             candidates = closer_targets or move_targets
             return min(candidates, key=approach_score)
 
-        def score(cell: Cell) -> Tuple[int, int, int]:
+        desired_direction = (
+            1 if direction_x > 0 else -1 if direction_x < 0 else 0,
+            1 if direction_y > 0 else -1 if direction_y < 0 else 0,
+        )
+
+        def score(cell: Cell) -> Tuple[int, int, int, int]:
             cell_x, cell_y = cell.action_click_point("move")
             delta_x = cell_x - ally_x
             delta_y = cell_y - ally_y
-            projection = delta_x * direction_x + delta_y * direction_y
+            step_direction = AutoFightProcessor._grid_direction(ally, cell)
+            # 先比较八方向的一致程度，再比较步数。远端方向只是局部导航
+            # 向量，不应驱使角色一次跨越多行；相同方向必须优先点击最近
+            # 的蓝格，下一回合重新建图后再走下一步。
+            alignment = (
+                step_direction[0] * desired_direction[0]
+                + step_direction[1] * desired_direction[1]
+            )
+            angular_error = abs(
+                step_direction[0] * desired_direction[1]
+                - step_direction[1] * desired_direction[0]
+            )
+            local_steps = max(
+                abs(cell.col - ally.col), abs(cell.row - ally.row)
+            )
             displacement = delta_x * delta_x + delta_y * delta_y
-            return projection, displacement, 0
+            return alignment, -angular_error, -local_steps, -displacement
 
         return max(move_targets, key=score)
 
@@ -768,7 +1338,7 @@ class AutoFightProcessor(CustomAction):
                 if cell.is_moveable or cell.is_attackable
             )
             last_state = (img, grid, range_count)
-            logger.info(
+            logger.debug(
                 f"选中状态取帧 {attempt}/{self.SELECT_CAPTURE_ATTEMPTS}: "
                 f"可信敌方={len(grid.enemy_units)}, 动作范围格={range_count}"
             )
@@ -794,7 +1364,7 @@ class AutoFightProcessor(CustomAction):
             "Battle_SelectedRoleCard", after_img
         )
         cancelled = range_count == 0 and not (still_open and still_open.hit)
-        logger.info(
+        logger.debug(
             f"取消当前选择: Esc点击={clicked}, "
             f"残留行动范围={range_count}, succeeded={cancelled}"
         )
@@ -847,8 +1417,480 @@ class AutoFightProcessor(CustomAction):
         if still_open and still_open.hit:
             logger.warning("点击顶部按钮后人物卡片仍存在")
             return False
-        logger.info("左上人物卡片已收起")
+        logger.debug("左上人物卡片已收起")
         return True
+
+    def _merge_world_view(
+        self,
+        grid: BattleGrid,
+        round_seen: int,
+        *,
+        replace_visible: bool,
+    ) -> None:
+        """Merge one local ``BattleGrid`` into the persistent battle map."""
+        if self._session is None:
+            return
+        self._session.world.merge_view(
+            round_seen,
+            allies=((cell.row, cell.col) for cell in grid.self_units),
+            enemies=((cell.row, cell.col) for cell in grid.enemy_units),
+            friends=((cell.row, cell.col) for cell in grid.friend_units),
+            environment=(
+                (cell.row, cell.col) for cell in grid.environment_units
+            ),
+            replace_visible=replace_visible,
+        )
+
+    def _fresh_world_targets(
+        self,
+    ) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
+        """Return only target observations that are safe for this decision.
+
+        Enemies can move after every submitted round, so an enemy coordinate
+        from an older round is a direction hint at best and must not remain an
+        A* goal.  Environment targets are static and may survive two briefly
+        occluded frames.
+        """
+
+        if self._session is None:
+            return [], []
+        round_seen = self._session.confirmed_rounds
+        world = self._session.world
+        enemies = world.unit_points(
+            WORLD_ENEMY,
+            current_round=round_seen,
+            max_age=self.ENEMY_OBSERVATION_MAX_AGE,
+        )
+        environment = world.unit_points(
+            WORLD_ENVIRONMENT,
+            current_round=round_seen,
+            max_age=self.ENVIRONMENT_OBSERVATION_MAX_AGE,
+        )
+        return enemies, environment
+
+    def _world_has_fresh_targets(self) -> bool:
+        enemies, environment = self._fresh_world_targets()
+        return bool(enemies or environment)
+
+    @classmethod
+    def _direction_from_screen_target(
+        cls, allies: List[Cell], target_x: int, target_y: int
+    ) -> Optional[Tuple[int, int]]:
+        if not allies:
+            return None
+        ally_x = sum(cell.safe_click_point()[0] for cell in allies) // len(allies)
+        ally_y = sum(cell.safe_click_point()[1] for cell in allies) // len(allies)
+        delta_x = target_x - ally_x
+        delta_y = target_y - ally_y
+        direction_x = (
+            0
+            if abs(delta_x) < cls.THREAT_DIRECTION_DEAD_ZONE
+            else (1 if delta_x > 0 else -1)
+        )
+        direction_y = (
+            0
+            if abs(delta_y) < cls.THREAT_DIRECTION_DEAD_ZONE
+            else (1 if delta_y > 0 else -1)
+        )
+        return (direction_x, direction_y) if direction_x or direction_y else None
+
+    def _merge_open_threat_overlay(
+        self, context: Context, img: Any, grid: BattleGrid, round_seen: int
+    ) -> List[Tuple[int, int]]:
+        """Map hidden enemies while the danger overlay is already enabled."""
+        if self._session is None or img is None:
+            return []
+        allies = [
+            cell for cell in grid.self_units if self._ally_is_actionable(cell)
+        ]
+        local_points: List[Tuple[int, int]] = []
+        confidence = 0.95
+        self._coarse_threat_direction = None
+
+        hidden_cell = self._threat_enemy_cell_from_mask(img, allies)
+        if hidden_cell is not None:
+            row, col, _ = hidden_cell
+            local_points.append((row, col))
+            self._coarse_threat_direction = self._direction_from_screen_target(
+                allies,
+                col * CELL_WIDTH + CELL_WIDTH // 2,
+                row * CELL_HEIGHT + CELL_HEIGHT // 2,
+            )
+        else:
+            # A continuous hollow or the overall ColorMatch box may still give
+            # a useful eight-direction hint, but neither is an enemy cell.  In
+            # particular, never persist the bounding-box centre as an A* goal.
+            origin = self._threat_origin_from_mask(img, allies)
+            if origin is not None:
+                origin_x, origin_y, _ = origin
+                self._coarse_threat_direction = self._direction_from_screen_target(
+                    allies, origin_x, origin_y
+                )
+            else:
+                recognition = context.run_recognition(
+                    "Battle_ThreatRegion", img
+                )
+                results = (
+                    recognition.filtered_results
+                    if recognition
+                    and recognition.hit
+                    and recognition.filtered_results
+                    else []
+                )
+                credible = []
+                for result in results:
+                    x, y, width, height = (
+                        int(value) for value in result.box
+                    )
+                    if (
+                        width >= self.THREAT_REGION_MIN_WIDTH
+                        and height >= self.THREAT_REGION_MIN_HEIGHT
+                        and width * height >= self.THREAT_REGION_MIN_BOX_AREA
+                    ):
+                        credible.append((width * height, x, y, width, height))
+                if credible:
+                    _, x, y, width, height = max(credible)
+                    self._coarse_threat_direction = self._direction_from_screen_target(
+                        allies,
+                        x + width // 2,
+                        y + height // 2,
+                    )
+
+        # Calling this with an empty list deliberately removes older threat
+        # cells from the current viewport.  Coarse direction hints never enter
+        # ``world.units`` and therefore cannot accumulate into phantom targets.
+        world_points = self._session.world.merge_threat_cells(
+            local_points,
+            round_seen,
+            confidence=confidence,
+        )
+        if local_points:
+            logger.info(
+                "确认锯齿空洞敌人格: "
+                f"local={local_points}, world={world_points}"
+            )
+        elif self._coarse_threat_direction is not None:
+            logger.debug(
+                "威胁层仅产生方向提示，不写入敌人坐标: "
+                f"direction={self._coarse_threat_direction}"
+            )
+        return local_points
+
+    def _refresh_local_threat_map(
+        self, context: Context, round_seen: int
+    ) -> bool:
+        """Refresh hidden-enemy markers in the current viewport only."""
+        self._coarse_threat_direction = None
+        if not self._set_threat_overlay(context, True):
+            self._threat_overlay_safe = False
+            return False
+        try:
+            img = self._screencap(context)
+            if img is None:
+                return False
+            self._scan_world_view(
+                context,
+                img,
+                round_seen,
+                overlay_open=True,
+            )
+            return True
+        finally:
+            restored = self._set_threat_overlay(context, False)
+            self._threat_overlay_safe = restored
+
+    def _scan_world_view(
+        self,
+        context: Context,
+        img: Any,
+        round_seen: int,
+        *,
+        overlay_open: bool,
+    ) -> BattleGrid:
+        grid = BattleGrid()
+        # 开启威胁层后，整片红色危险格会被普通红条 ColorMatch 切成大量
+        # 水平碎片。它们不是敌人血条，不能写入持久地图；覆盖层画面只
+        # 保留蓝/绿单位，敌人位置统一由锯齿中心/威胁区专用识别写入。
+        scan_types = (
+            (CellType.SELF, CellType.FRIEND) if overlay_open else None
+        )
+        self.scanner.scan_grid(
+            grid,
+            context,
+            img,
+            cell_types=scan_types,
+        )
+        self._merge_world_view(
+            grid,
+            round_seen,
+            # The red overlay can temporarily hide a health bar.  Never erase
+            # normal observations from an overlay frame.
+            replace_visible=not overlay_open,
+        )
+        if overlay_open:
+            self._merge_open_threat_overlay(context, img, grid, round_seen)
+        return grid
+
+    def _pan_world_once(
+        self,
+        context: Context,
+        direction: Tuple[int, int],
+        round_seen: int,
+        *,
+        overlay_open: bool,
+        phase: str,
+        fine: bool = False,
+    ) -> Optional[Tuple[bool, Optional[BattleGrid], Any]]:
+        """Pan once, register measured camera motion, then update the map.
+
+        ``direction`` is expressed as ``(world_row, world_col)``.  The return
+        value is ``(moved, grid, image)``; ``None`` means the swipe action itself
+        failed and therefore must not be mistaken for a map boundary.
+        """
+        if self._session is None:
+            return None
+        before_img = self._screencap(context)
+        if before_img is None:
+            return None
+        before_observed = len(self._session.world.observed)
+        direction_xy = direction[1], direction[0]
+        if not self._pan_camera(context, direction_xy, fine=fine):
+            logger.warning(f"{phase}地图滑动动作失败: direction={direction}")
+            return None
+        after_img = self._screencap(context)
+        if after_img is None:
+            return None
+
+        shift_x, shift_y, response = self._camera_motion(before_img, after_img)
+        if not self._camera_shift_is_real(shift_x, shift_y, response):
+            self._session.world.mark_boundary(direction)
+            logger.info(
+                f"{phase}到达地图边界: direction={direction}, "
+                f"motion=({shift_x:.1f},{shift_y:.1f}), response={response:.3f}"
+            )
+            return False, None, after_img
+
+        origin_delta = self._session.world.apply_camera_motion(shift_x, shift_y)
+        grid = self._scan_world_view(
+            context,
+            after_img,
+            round_seen,
+            overlay_open=overlay_open,
+        )
+        # Camera exploration alone is not combat progress.  In particular,
+        # threat cells can appear/disappear as overlapping viewports clip the
+        # jagged hole; resetting the watchdog for that visual churn made the
+        # 12-cycle no-progress fuse stay forever at 1/12.  Newly observed map
+        # cells are useful progress, while confirmed attacks/moves reset the
+        # counter at their action sites.
+        if len(self._session.world.observed) > before_observed:
+            self._session.record_progress()
+        logger.debug(
+            f"{phase}地图更新: direction={direction}, "
+            f"motion=({shift_x:.1f},{shift_y:.1f}), "
+            f"origin_delta={origin_delta}, "
+            f"origin={self._session.world.camera_origin}, "
+            f"explored={len(self._session.world.observed)}"
+        )
+        return True, grid, after_img
+
+    def _explore_world_clockwise(
+        self, context: Context, round_seen: int
+    ) -> bool:
+        """Explore right/down/left/up with threat mapping kept enabled."""
+        if self._session is None:
+            return False
+        explorer = self._session.new_exploration_pass()
+        world = self._session.world
+        self._coarse_threat_direction = None
+        logger.info(
+            f"开始第 {self._session.exploration_passes} 次顺时针全局建图："
+            "右 -> 下 -> 左 -> 上"
+        )
+        if not self._set_threat_overlay(context, True):
+            self._threat_overlay_safe = False
+            return False
+
+        action_failures = 0
+        try:
+            initial_img = self._screencap(context)
+            if initial_img is None:
+                return False
+            self._scan_world_view(
+                context,
+                initial_img,
+                round_seen,
+                overlay_open=True,
+            )
+            while not explorer.completed and not context.tasker.stopping:
+                if world.has_allies() and (
+                    self._world_has_fresh_targets()
+                    or self._coarse_threat_direction is not None
+                ):
+                    logger.info("全局地图已同时具备我方和敌人，提前结束探索")
+                    break
+                direction = explorer.direction
+                pan_result = self._pan_world_once(
+                    context,
+                    direction,
+                    round_seen,
+                    overlay_open=True,
+                    phase="顺时针探索",
+                )
+                if pan_result is None:
+                    action_failures += 1
+                    if action_failures >= 2:
+                        logger.error("顺时针探索连续两次滑动动作失败")
+                        return False
+                    continue
+                action_failures = 0
+                moved, _, _ = pan_result
+                explorer.record_pan(moved)
+        finally:
+            restored = self._set_threat_overlay(context, False)
+            self._threat_overlay_safe = restored
+
+        if not self._threat_overlay_safe:
+            logger.error("顺时针探索结束后无法关闭威胁层")
+            return False
+        logger.info(
+            "顺时针建图结束: "
+            f"complete={explorer.completed}, swipes={explorer.successful_swipes}, "
+            f"allies={len(world.unit_points(WORLD_SELF))}, "
+            f"enemies={len(world.unit_points(WORLD_ENEMY))}, "
+            f"environment={len(world.unit_points(WORLD_ENVIRONMENT))}"
+        )
+        return world.has_allies() and (
+            self._world_has_fresh_targets()
+            or self._coarse_threat_direction is not None
+        )
+
+    def _focus_known_ally(
+        self, context: Context, round_seen: int
+    ) -> Optional[Tuple[BattleGrid, Any]]:
+        """Move the camera to the newest known ally and leave it actionable."""
+        if self._session is None:
+            return None
+        if not self._set_threat_overlay(context, False):
+            return None
+        world = self._session.world
+        failed_pans = 0
+
+        for _ in range(14):
+            img = self._screencap(context)
+            if img is None:
+                return None
+            grid = self._scan_world_view(
+                context,
+                img,
+                round_seen,
+                overlay_open=False,
+            )
+            actionable = [
+                cell for cell in grid.self_units if self._ally_is_actionable(cell)
+            ]
+            centered = [
+                cell
+                for cell in actionable
+                if 1 <= cell.row <= ROWS - 2 and 1 <= cell.col <= COLS - 2
+            ]
+            if centered:
+                return grid, img
+            if actionable:
+                target_world = world.local_to_world(
+                    actionable[0].row, actionable[0].col
+                )
+            else:
+                ally_points = world.unit_points(WORLD_SELF)
+                if not ally_points:
+                    return None
+                target_world = ally_points[0]
+
+            local = world.world_to_local(target_world)
+            if local is None:
+                origin_row, origin_col = world.camera_origin
+                centre = origin_row + ROWS // 2, origin_col + COLS // 2
+                row_direction = (
+                    0
+                    if target_world[0] == centre[0]
+                    else (1 if target_world[0] > centre[0] else -1)
+                )
+                col_direction = (
+                    0
+                    if target_world[1] == centre[1]
+                    else (1 if target_world[1] > centre[1] else -1)
+                )
+            else:
+                row_direction = -1 if local[0] <= 0 else (1 if local[0] >= ROWS - 1 else 0)
+                col_direction = -1 if local[1] <= 0 else (1 if local[1] >= COLS - 1 else 0)
+            direction = row_direction, col_direction
+            if direction == (0, 0):
+                # The remembered ally was inside this view but a fresh normal
+                # scan invalidated it.  Retry with another observation.
+                continue
+
+            pan_result = self._pan_world_once(
+                context,
+                direction,
+                round_seen,
+                overlay_open=False,
+                phase="定位我方",
+                fine=True,
+            )
+            if pan_result is None:
+                failed_pans += 1
+                if failed_pans >= 2:
+                    return None
+                continue
+            moved, _, _ = pan_result
+            if not moved:
+                # Reaching a camera boundary does not invalidate a unit that
+                # is already inside the conservative click-safe rectangle.
+                # Returning that edge view lets the local planner select the
+                # ally and move toward the retained threat target instead of
+                # re-entering global exploration forever.
+                if actionable:
+                    logger.info(
+                        "镜头已到边界，沿用当前可操作我方视野进入点对点行动"
+                    )
+                    return grid, img
+                return None
+        return None
+
+    def _world_pursuit(
+        self, grid: BattleGrid, ally: Optional[Cell] = None
+    ) -> Tuple[Optional[Tuple[int, int]], Optional[Tuple[int, int]], bool]:
+        """Return screen-order direction, local target and environment mode."""
+        if self._session is None:
+            return None, None, False
+        world = self._session.world
+        if ally is None:
+            actionable = [
+                cell for cell in grid.self_units if self._ally_is_actionable(cell)
+            ]
+            if not actionable:
+                return None, None, False
+            ally = actionable[0]
+        ally_world = world.local_to_world(ally.row, ally.col)
+        enemy_points, environment_points = self._fresh_world_targets()
+        environment_mode = not enemy_points and bool(environment_points)
+        targets = enemy_points or environment_points
+        if not targets:
+            return self._coarse_threat_direction, None, environment_mode
+        target = min(
+            targets,
+            key=lambda point: (
+                max(abs(point[0] - ally_world[0]), abs(point[1] - ally_world[1])),
+                point,
+            ),
+        )
+        row_delta = target[0] - ally_world[0]
+        col_delta = target[1] - ally_world[1]
+        direction = (
+            0 if col_delta == 0 else (1 if col_delta > 0 else -1),
+            0 if row_delta == 0 else (1 if row_delta > 0 else -1),
+        )
+        return direction, world.world_to_local(target), environment_mode
 
     def _search_for_enemies(
         self, context: Context
@@ -871,9 +1913,9 @@ class AutoFightProcessor(CustomAction):
             f"最多滑动 {self.MAX_SEARCH_SWIPES} 次"
         )
 
-        # 危险覆盖区是敌人的攻击范围，不是敌人坐标。远程/固定敌人的
-        # 覆盖区质心经常位于敌人反方向；同时红色半透明地块会污染红色
-        # 状态条识别。因此搜索期间保持覆盖层关闭，只认真实红色血条。
+        # 搜索阶段既检查真实红色血条，也检查危险覆盖区。草丛会遮住
+        # 血条，而覆盖区的锯齿中心仍标识敌人；找到覆盖区时，当前镜头
+        # 相对起点的偏移就是返回我方后应推进的粗粒度方向。
         self._set_threat_overlay(context, False)
 
         for direction in self._spiral_directions(self.MAX_SEARCH_SWIPES):
@@ -895,18 +1937,27 @@ class AutoFightProcessor(CustomAction):
             offset_x += direction[0]
             offset_y += direction[1]
             views_scanned += 1
-            logger.info(
+            threat_regions = []
+            if not search_grid.enemy_units:
+                threat_regions = self._visible_threat_regions(context)
+            logger.debug(
                 f"地图搜索视野 {views_scanned}: offset=({offset_x},{offset_y}), "
                 f"真实红色状态条={len(search_grid.enemy_units)}, "
+                f"威胁区域={len(threat_regions)}, "
                 f"环境目标={len(search_grid.environment_units)}, "
                 f"我方={len(search_grid.self_units)}"
             )
-            if search_grid.enemy_units or search_grid.environment_units:
+            if (
+                search_grid.enemy_units
+                or search_grid.environment_units
+                or threat_regions
+            ):
                 found_direction = (offset_x, offset_y)
-                found_enemy_count = len(search_grid.enemy_units)
+                found_enemy_count = len(search_grid.enemy_units) or len(threat_regions)
                 found_environment_count = len(search_grid.environment_units)
                 found_environment_only = (
                     not search_grid.enemy_units
+                    and not threat_regions
                     and bool(search_grid.environment_units)
                 )
                 found_view = views_scanned
@@ -915,6 +1966,11 @@ class AutoFightProcessor(CustomAction):
                     logger.info(
                         "搜索视野已确认祭坛/石碑类环境目标："
                         f"数量={found_environment_count}"
+                    )
+                elif threat_regions:
+                    logger.info(
+                        "搜索视野已确认隐藏敌人的威胁区域（锯齿中心方向有效）："
+                        f"区域数={len(threat_regions)}"
                     )
                 else:
                     logger.info(
@@ -1018,6 +2074,289 @@ class AutoFightProcessor(CustomAction):
             return found_direction, restored_grid, found_environment_only
         return None
 
+    def _visible_threat_regions(
+        self, context: Context
+    ) -> List[Tuple[int, int, int, int]]:
+        """Return credible danger-overlay regions for the current camera view.
+
+        This is deliberately independent of ally detection: while the search
+        camera is panned away from the party, the threat region alone is enough
+        to prove that the viewport contains a hidden enemy.  The caller keeps
+        the camera offset and later returns to the party before moving.
+        """
+        if not self._set_threat_overlay(context, True):
+            self._set_threat_overlay(context, False)
+            return []
+
+        try:
+            img = self._screencap(context)
+            if img is None:
+                return []
+            recognition = context.run_recognition("Battle_ThreatRegion", img)
+            results = (
+                recognition.filtered_results
+                if recognition
+                and recognition.hit
+                and recognition.filtered_results
+                else []
+            )
+            credible: List[Tuple[int, int, int, int]] = []
+            for result in results:
+                x, y, width, height = result.box
+                if (
+                    width >= self.THREAT_REGION_MIN_WIDTH
+                    and height >= self.THREAT_REGION_MIN_HEIGHT
+                    and width * height >= self.THREAT_REGION_MIN_BOX_AREA
+                ):
+                    credible.append((x, y, width, height))
+            return credible
+        finally:
+            # Red cover masks health bars and can be mistaken for enemy pixels
+            # by the normal scanner, so always restore the ordinary view.
+            self._set_threat_overlay(context, False)
+
+    def _hidden_enemy_direction(
+        self, context: Context, grid: BattleGrid
+    ) -> Optional[Tuple[int, int]]:
+        """用危险覆盖区推断当前视野中隐匿敌人的粗粒度方向。
+
+        草丛会隐藏敌人的红色生命条，不能据此构造一个可点击敌人格；这里只
+        临时打开危险覆盖层，取最大的可信红色连通框相对我方的方向。随后无论
+        识别成功与否都关闭覆盖层，避免半透明红地块污染正常红条扫描。
+        """
+        self._hidden_enemy_cell = None
+        self._threat_overlay_safe = True
+        allies = [
+            cell for cell in grid.self_units if self._ally_is_actionable(cell)
+        ]
+        if not allies:
+            return None
+
+        if not self._set_threat_overlay(context, True):
+            self._set_threat_overlay(context, False)
+            return None
+
+        direction: Optional[Tuple[int, int]] = None
+        accepted_box: Optional[Tuple[int, int, int, int]] = None
+        origin_score: Optional[float] = None
+        restored = False
+        try:
+            img = self._screencap(context)
+            if img is not None:
+                hidden_cell = self._threat_enemy_cell_from_mask(img, allies)
+                origin = self._threat_origin_from_mask(img, allies)
+                recognition = context.run_recognition("Battle_ThreatRegion", img)
+                results = (
+                    recognition.filtered_results
+                    if recognition
+                    and recognition.hit
+                    and recognition.filtered_results
+                    else []
+                )
+                candidates = []
+                for result in results:
+                    x, y, width, height = (
+                        int(value) for value in result.box
+                    )
+                    box_area = width * height
+                    if (
+                        width >= self.THREAT_REGION_MIN_WIDTH
+                        and height >= self.THREAT_REGION_MIN_HEIGHT
+                        and box_area >= self.THREAT_REGION_MIN_BOX_AREA
+                    ):
+                        candidates.append((box_area, x, y, width, height))
+
+                if hidden_cell is not None:
+                    row, col, origin_score = hidden_cell
+                    self._hidden_enemy_cell = (row, col)
+                    target_x = col * 120 + 60
+                    target_y = row * 120 + 60
+                    accepted_box = (target_x, target_y, 0, 0)
+                elif origin is not None:
+                    target_x, target_y, origin_score = origin
+                    accepted_box = (target_x, target_y, 0, 0)
+                elif candidates:
+                    _, x, y, width, height = max(candidates)
+                    accepted_box = (x, y, width, height)
+                    target_x = x + width // 2
+                    target_y = y + height // 2
+
+                if accepted_box is not None:
+                    ally_x = sum(cell.safe_click_point()[0] for cell in allies) // len(
+                        allies
+                    )
+                    ally_y = sum(cell.safe_click_point()[1] for cell in allies) // len(
+                        allies
+                    )
+                    delta_x = target_x - ally_x
+                    delta_y = target_y - ally_y
+                    direction_x = (
+                        0
+                        if abs(delta_x) < self.THREAT_DIRECTION_DEAD_ZONE
+                        else (1 if delta_x > 0 else -1)
+                    )
+                    direction_y = (
+                        0
+                        if abs(delta_y) < self.THREAT_DIRECTION_DEAD_ZONE
+                        else (1 if delta_y > 0 else -1)
+                    )
+                    if direction_x or direction_y:
+                        direction = (direction_x, direction_y)
+        finally:
+            restored = self._set_threat_overlay(context, False)
+
+        if not restored:
+            self._threat_overlay_safe = False
+            logger.warning("隐匿敌人探测后未能关闭危险覆盖层，放弃本次方向")
+            return None
+        if direction is None:
+            logger.info("危险覆盖层未发现足够大的可信连通区")
+            return None
+
+        logger.info(
+            f"危险覆盖区 {accepted_box} 相对我方给出隐匿敌人方向 {direction}"
+            + (
+                f"，锯齿中心格={self._hidden_enemy_cell}"
+                if self._hidden_enemy_cell is not None
+                else ""
+            )
+        )
+        return direction
+
+    def _threat_enemy_cell_from_mask(
+        self, img: Any, allies: List[Cell]
+    ) -> Optional[Tuple[int, int, float]]:
+        """Locate the enemy's grid cell from the jagged hole in danger tiles.
+
+        A hidden enemy does not remove the red mask completely: its sprite
+        covers the centre of its own 120px cell while the ground still shows
+        around the edges.  Normal danger cells retain a red centre, and empty
+        terrain has no red coverage at all.  Requiring two adjacent danger
+        cells keeps grass and tree holes from becoming targets.
+        """
+        if img is None or len(img.shape) < 2:
+            return None
+
+        height = min(int(img.shape[0]), ROWS * 120)
+        width = min(int(img.shape[1]), COLS * 120)
+        if height < ROWS * 120 or width < COLS * 120:
+            return None
+        hsv = cv2.cvtColor(img[:height, :width], cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, (2, 130, 75), (20, 200, 165)) > 0
+        coverage = {
+            (row, col): float(
+                mask[row * 120 : (row + 1) * 120,
+                     col * 120 : (col + 1) * 120].mean()
+            )
+            for row in range(ROWS)
+            for col in range(COLS)
+        }
+        ally_cells = {(cell.row, cell.col) for cell in allies}
+        best: Optional[Tuple[float, int, int]] = None
+        for row in range(ROWS):
+            for col in range(COLS):
+                if (row, col) in ally_cells:
+                    continue
+                cell_coverage = coverage[(row, col)]
+                if not (
+                    self.THREAT_CELL_MIN_COVERAGE
+                    <= cell_coverage
+                    <= self.THREAT_CELL_MAX_COVERAGE
+                ):
+                    continue
+                centre = mask[
+                    row * 120 + 40 : row * 120 + 80,
+                    col * 120 + 40 : col * 120 + 80,
+                ]
+                centre_coverage = float(centre.mean())
+                if centre_coverage > self.THREAT_CELL_CENTER_MAX_COVERAGE:
+                    continue
+                neighbours = [
+                    coverage.get((row + row_delta, col + col_delta), 0.0)
+                    for row_delta, col_delta in ((-1, 0), (1, 0), (0, -1), (0, 1))
+                ]
+                red_neighbours = sum(
+                    value >= self.THREAT_CELL_NEIGHBOR_MIN_COVERAGE
+                    for value in neighbours
+                )
+                if red_neighbours < self.THREAT_CELL_MIN_RED_NEIGHBORS:
+                    continue
+                # Prefer a conspicuously occluded centre, then the candidate
+                # closest to the surrounding red threat pattern.
+                score = (
+                    2.5 * (self.THREAT_CELL_MAX_COVERAGE - cell_coverage)
+                    + sum(neighbours)
+                    + (self.THREAT_CELL_CENTER_MAX_COVERAGE - centre_coverage)
+                )
+                if best is None or score > best[0]:
+                    best = (score, row, col)
+        if best is None:
+            return None
+        score, row, col = best
+        return row, col, score
+
+    def _threat_origin_from_mask(
+        self, img: Any, allies: List[Cell]
+    ) -> Optional[Tuple[int, int, float]]:
+        """Find a hidden enemy from the jagged centre of its threat overlay.
+
+        The overlay is drawn on threatened cells, while an enemy sprite hides the
+        overlay on its own cell.  Thus the enemy becomes a non-red hole surrounded
+        by red cells.  Friendly-unit holes are rejected from their known positions.
+        The result is used only as a pursuit direction, never as a click target.
+        """
+        if img is None or len(img.shape) < 2:
+            return None
+
+        height = min(int(img.shape[0]), 1160)
+        width = min(int(img.shape[1]), 720)
+        ring = self.THREAT_ORIGIN_RING_RADIUS
+        core = self.THREAT_ORIGIN_CORE_RADIUS
+        if height <= ring * 2 or width <= ring * 2:
+            return None
+
+        hsv = cv2.cvtColor(img[:height, :width], cv2.COLOR_BGR2HSV)
+        red_mask = cv2.inRange(hsv, (2, 130, 75), (20, 200, 165))
+        mask = (red_mask > 0).astype("uint8")
+        if int(mask.sum()) < self.THREAT_REGION_MIN_BOX_AREA // 8:
+            return None
+
+        ally_points = [cell.safe_click_point() for cell in allies]
+        best: Optional[Tuple[float, int, int]] = None
+        for y in range(ring, height - ring, self.THREAT_ORIGIN_SAMPLE_STEP):
+            for x in range(ring, width - ring, self.THREAT_ORIGIN_SAMPLE_STEP):
+                if mask[y, x]:
+                    continue
+                if any(
+                    (x - ally_x) ** 2 + (y - ally_y) ** 2
+                    < self.THREAT_ORIGIN_MIN_DISTANCE_FROM_ALLY ** 2
+                    for ally_x, ally_y in ally_points
+                ):
+                    continue
+
+                core_coverage = float(
+                    mask[y - core : y + core, x - core : x + core].mean()
+                )
+                if core_coverage > 0.30:
+                    continue
+                coverage = (
+                    float(mask[y - ring : y - core, x - core : x + core].mean()),
+                    float(mask[y + core : y + ring, x - core : x + core].mean()),
+                    float(mask[y - core : y + core, x - ring : x - core].mean()),
+                    float(mask[y - core : y + core, x + core : x + ring].mean()),
+                )
+                weakest = min(coverage)
+                score = weakest + sum(coverage) / 8 - core_coverage * 0.25
+                if weakest < 0.20 or score < self.THREAT_ORIGIN_MIN_SCORE:
+                    continue
+                if best is None or score > best[0]:
+                    best = (score, x, y)
+
+        if best is None:
+            return None
+        score, x, y = best
+        return x, y, score
+
     def _search_for_allies_and_stay(
         self, context: Context
     ) -> Optional[BattleGrid]:
@@ -1066,7 +2405,7 @@ class AutoFightProcessor(CustomAction):
             executed_steps.append(direction)
             offset_x += direction[0]
             offset_y += direction[1]
-            logger.info(
+            logger.debug(
                 f"我方搜索视野 {view_index}: offset=({offset_x},{offset_y}), "
                 f"我方={len(search_grid.self_units)}, "
                 f"敌人={len(search_grid.enemy_units)}"
@@ -1137,140 +2476,108 @@ class AutoFightProcessor(CustomAction):
             self._pan_camera(context, (-direction[0], -direction[1]))
 
     def _recenter_edge_allies(
-        self, context: Context, grid: BattleGrid
-    ) -> Tuple[BattleGrid, bool]:
-        """把边缘敌人/我方平移到可识别、可点击的安全区域。"""
+        self,
+        context: Context,
+        grid: BattleGrid,
+        round_seen: int,
+        *,
+        known_target: Optional[Tuple[int, int]] = None,
+    ) -> Tuple[BattleGrid, bool, Any]:
+        """Pan edge units inward and keep the persistent map synchronized."""
         if not grid.self_units:
-            return grid, False
+            return grid, False, None
 
         current_grid = grid
         moved = False
-        screen_center = (360, 580)
+        latest_img = None
+        known_world_target = (
+            self._session.world.local_to_world(*known_target)
+            if known_target is not None and self._session is not None
+            else None
+        )
 
-        # 固定目标可能长期停在第 0 行/最外列。虽然红条还能被识别，黄色
-        # 攻击角标却会被屏幕裁掉，角色便只会在附近移动而无法攻击。
-        # 先用小步把真实敌人拉回画面，再重新建立完整网格。
-        for _ in range(2):
-            edge_enemy = next(
-                (
-                    cell
-                    for cell in current_grid.enemy_units
-                    if (
-                        cell.safe_click_point()[1] < 160
-                        or cell.safe_click_point()[1] > 1000
-                        or cell.safe_click_point()[0] < 90
-                        or cell.safe_click_point()[0] > 630
-                    )
-                ),
-                None,
-            )
-            if edge_enemy is None:
-                break
-            enemy_x, enemy_y = edge_enemy.safe_click_point()
-            if enemy_y < 160:
-                direction = (0, -1)
-            elif enemy_y > 1000:
-                direction = (0, 1)
-            elif enemy_x < 90:
-                direction = (-1, 0)
-            else:
-                direction = (1, 0)
-            logger.info(
-                f"敌人状态条位于边缘 ({enemy_x},{enemy_y})，"
-                f"向 {direction} 平移镜头以恢复完整攻击框"
-            )
-            if not self._pan_camera(context, direction, fine=True):
-                logger.warning(f"居中敌人视野时地图滑动 {direction} 失败")
-                break
-            img = self._screencap(context)
-            if img is None:
-                break
-            candidate_grid = BattleGrid()
-            self.scanner.scan_grid(candidate_grid, context, img)
-            if not candidate_grid.self_units or not candidate_grid.enemy_units:
-                logger.warning("居中敌人后丢失我方或敌方，撤销本次滑动")
-                self._pan_camera(
-                    context, (-direction[0], -direction[1]), fine=True
-                )
-                break
-            current_grid = candidate_grid
-            moved = True
-
-        if current_grid.self_units and all(
-            self._ally_is_actionable(cell)
-            for cell in current_grid.self_units
-        ):
-            return current_grid, moved
-
+        # A corner unit needs one diagonal nudge, not two alternating cardinal
+        # nudges.  The candidate frame must still contain the party and, when a
+        # real enemy was visible, that enemy as well.  Failed nudges are rolled
+        # back through the same map-aware path so camera_origin stays correct.
         for _ in range(4):
+            edge_enemies = [
+                cell
+                for cell in current_grid.enemy_units
+                if self._edge_recenter_direction(
+                    cell,
+                    x_bounds=self.ACTION_SAFE_X,
+                    y_bounds=(160, 1000),
+                )
+                is not None
+            ]
             unsafe_allies = [
                 cell
                 for cell in current_grid.self_units
                 if not self._ally_is_actionable(cell)
             ]
-            if not unsafe_allies:
+            known_edge_cells: List[Cell] = []
+            if known_world_target is not None and self._session is not None:
+                current_local_target = self._session.world.world_to_local(
+                    known_world_target
+                )
+                if current_local_target is not None:
+                    synthetic_target = Cell(*current_local_target)
+                    if self._edge_recenter_direction(
+                        synthetic_target,
+                        x_bounds=self.ACTION_SAFE_X,
+                        y_bounds=(160, 1000),
+                    ) is not None:
+                        known_edge_cells.append(synthetic_target)
+            if not edge_enemies and not unsafe_allies and not known_edge_cells:
                 break
-            target = min(
-                unsafe_allies,
-                key=lambda cell: (
-                    cell.safe_click_point()[0] - screen_center[0]
-                )
-                ** 2
-                + (
-                    cell.safe_click_point()[1] - screen_center[1]
-                )
-                ** 2,
+            focus_cells = edge_enemies + known_edge_cells + unsafe_allies
+            direction = self._edge_recenter_direction(
+                focus_cells,
+                x_bounds=self.ACTION_SAFE_X,
+                y_bounds=(160, 1000)
+                if edge_enemies or known_edge_cells
+                else self.ACTION_SAFE_Y,
             )
-            target_x, target_y = target.safe_click_point()
-            # 每次只走一个小步并重新建图；横向调整可能同时改变纵向投影。
-            if target_y > self.ACTION_SAFE_Y[1]:
-                direction = (0, 1)
-            elif target_y < self.ACTION_SAFE_Y[0]:
-                direction = (0, -1)
-            elif target_x > self.ACTION_SAFE_X[1]:
-                direction = (1, 0)
-            elif target_x < self.ACTION_SAFE_X[0]:
-                direction = (-1, 0)
-            else:
+            if direction is None:
                 break
             logger.info(
-                f"我方状态条位于边缘 ({target_x},{target_y})，"
-                f"向 {direction} 平移镜头以获得可操作视野"
+                "边缘单位重定位: "
+                f"allies={len(unsafe_allies)}, enemies={len(edge_enemies)}, "
+                f"hidden_targets={len(known_edge_cells)}, "
+                f"direction={direction}"
             )
-            if not self._pan_camera(context, direction, fine=True):
-                logger.warning(f"居中我方视野时地图滑动 {direction} 失败")
-                continue
-            img = self._screencap(context)
-            if img is None:
-                continue
-            candidate_grid = BattleGrid()
-            self.scanner.scan_grid(candidate_grid, context, img)
-            if not candidate_grid.self_units:
-                logger.warning("居中滑动后暂时没有识别到我方，撤销本次滑动")
-                self._pan_camera(
-                    context, (-direction[0], -direction[1]), fine=True
-                )
-                continue
-            candidate_target = min(
-                candidate_grid.self_units,
-                key=lambda cell: (
-                    cell.safe_click_point()[0] - screen_center[0]
-                )
-                ** 2
-                + (
-                    cell.safe_click_point()[1] - screen_center[1]
-                )
-                ** 2,
+            pan_result = self._pan_world_once(
+                context,
+                (direction[1], direction[0]),
+                round_seen,
+                overlay_open=False,
+                phase="边缘重定位",
+                fine=True,
             )
-            candidate_x, candidate_y = candidate_target.safe_click_point()
-            if abs(candidate_x - target_x) + abs(candidate_y - target_y) < 15:
-                logger.info("细调镜头后我方坐标基本不变，判定已到地图边界")
-                current_grid = candidate_grid
+            if pan_result is None:
+                logger.warning(f"边缘重定位滑动 {direction} 失败")
+                break
+            did_pan, candidate_grid, candidate_img = pan_result
+            if not did_pan or candidate_grid is None:
+                break
+            keeps_enemy = not edge_enemies or bool(candidate_grid.enemy_units)
+            if not candidate_grid.self_units or not keeps_enemy:
+                logger.warning("边缘重定位后无法同时保留敌我，撤销本次滑动")
+                self._pan_world_once(
+                    context,
+                    (-direction[1], -direction[0]),
+                    round_seen,
+                    overlay_open=False,
+                    phase="边缘重定位回滚",
+                    fine=True,
+                )
                 break
             current_grid = candidate_grid
+            latest_img = candidate_img
             moved = True
 
-        return current_grid, moved
+        return current_grid, moved, latest_img
 
     @classmethod
     def _ally_is_actionable(cls, cell: Cell) -> bool:
@@ -1341,6 +2648,10 @@ class AutoFightProcessor(CustomAction):
             (-1, 0): f"{prefix}Left",
             (0, 1): f"{prefix}Down",
             (0, -1): f"{prefix}Up",
+            (1, 1): f"{prefix}DownRight",
+            (-1, 1): f"{prefix}DownLeft",
+            (-1, -1): f"{prefix}UpLeft",
+            (1, -1): f"{prefix}UpRight",
         }
         node = node_by_direction.get(direction)
         if node is None:
@@ -1369,23 +2680,26 @@ class AutoFightProcessor(CustomAction):
         return result
 
     def _click_cell(self, context: Context, cell: Cell, label: str) -> bool:
-        """点击目标并再次点击确认；该游戏第一次点击只生成动作预览。"""
-        action = "attack" if label == "攻击" else "move"
+        """局部网格点对点操作：移动格与敌人格都点击两次提交。"""
+        action = "attack" if "攻击" in label else "move"
         x, y = cell.action_click_point(action)
-        logger.info(f"{label}点击: ({cell.row}, {cell.col}) -> ({x}, {y})")
-        previewed = self._click_and_log(context, x, y, f"{label}预览点击")
-        if not previewed:
+        logger.debug(f"{label}点击: ({cell.row}, {cell.col}) -> ({x}, {y})")
+        first = self._click_and_log(context, x, y, f"{label}目标点击")
+        if not first:
             return False
-        time.sleep(0.35)
-        confirmed = self._click_and_log(context, x, y, f"{label}确认点击")
-        time.sleep(0.8)
-        return confirmed
+        # 第一次点击生成路径/攻击预览，第二次点击同一目标正式提交。
+        time.sleep(0.2)
+        second = self._click_and_log(context, x, y, f"{label}确认点击")
+        # 4 倍速下 0.5 秒足以让镜头、人物和范围层落稳；后续仍通过
+        # 画面/血条/回合变化做确认，而不是把等待本身当作成功。
+        time.sleep(0.5)
+        return second
 
     @staticmethod
     def _click_and_log(context: Context, x: int, y: int, label: str) -> bool:
         job = context.tasker.controller.post_click(x, y).wait()
         succeeded = bool(job.succeeded)
-        logger.info(f"{label}: ({x}, {y}), controller_succeeded={succeeded}")
+        logger.debug(f"{label}: ({x}, {y}), controller_succeeded={succeeded}")
         return succeeded
 
     @staticmethod
@@ -1407,6 +2721,15 @@ class AutoFightProcessor(CustomAction):
             logger.info("识别到战斗胜利结算页，战斗正常结束")
             return True
         return None
+
+    def _record_round_advance(self, source: str) -> None:
+        if self._session is None:
+            return
+        self._session.record_round_advance()
+        logger.info(
+            f"整场战斗回合进度 +1: {self._session.confirmed_rounds} "
+            f"(source={source})"
+        )
 
     def _end_round(
         self, context: Context, round_reference: Any, phase: str
@@ -1441,6 +2764,7 @@ class AutoFightProcessor(CustomAction):
                 context, round_reference, timeout=timeout
             ):
                 logger.debug(f"{phase}已确认回合变化")
+                self._record_round_advance(f"{phase}结束回合")
                 return None
 
             latest_img = self._screencap(context)
@@ -1466,6 +2790,7 @@ class AutoFightProcessor(CustomAction):
         target: Cell,
     ) -> Tuple[bool, bool]:
         """确认具体动作结果，不能把“范围消失”误当成攻击/移动成功。"""
+        is_move = "移动" in label
         last_frame_score = 0.0
         target_bar_point = (
             target.target_center
@@ -1495,6 +2820,7 @@ class AutoFightProcessor(CustomAction):
                     f"{label}后回合数字连续稳定变化，"
                     f"像素差异={round_score:.2f}，动作已生效"
                 )
+                self._record_round_advance(f"{label}后自动换回合")
                 return True, True
 
             range_grid = BattleGrid()
@@ -1505,8 +2831,22 @@ class AutoFightProcessor(CustomAction):
                 for cell in row
                 if cell.is_moveable or cell.is_attackable
             )
-            if remaining_ranges == 0:
-                if label == "移动":
+            if is_move:
+                # 蓝色范围会与普通状态条连成大片，但选中角色上方一排独立
+                # 菱形行动点仍保持清晰。先用该局部特征确认移动，既不需要
+                # Esc（会撤销移动），也不需要二次点击目标格。
+                selected_self_cells = self._selected_self_cells(after_img)
+                reached_target = (target.row, target.col) in selected_self_cells
+                still_at_origin = (ally.row, ally.col) in selected_self_cells
+                if reached_target and not still_at_origin:
+                    logger.info(
+                        f"移动确认成功: 我方已从 ({ally.row}, {ally.col}) "
+                        f"到达 ({target.row}, {target.col})，"
+                        f"菱形行动点={sorted(selected_self_cells)}，"
+                        f"剩余行动范围={remaining_ranges}"
+                    )
+                    return True, False
+                if remaining_ranges == 0:
                     post_grid = BattleGrid()
                     self.scanner.scan_grid(
                         post_grid,
@@ -1522,29 +2862,159 @@ class AutoFightProcessor(CustomAction):
                         cell.row == ally.row and cell.col == ally.col
                         for cell in post_grid.self_units
                     )
+                    post_points = [
+                        cell.safe_click_point() for cell in post_grid.self_units
+                    ]
+                    # 镜头平移会让视觉网格在 120px 周期内产生相位偏移，
+                    # 因此 move_center 对应的实际 row/col 不一定能和旧快照
+                    # 直接相等。用目标蓝格与旧角色状态条的局部像素偏移，
+                    # 预测移动后状态条位置，再在新截图中做邻近验证。
+                    move_x, move_y = target.action_click_point("move")
+                    ally_x, ally_y = ally.safe_click_point()
+                    ally_grid_x = move_x + (ally.col - target.col) * CELL_WIDTH
+                    ally_grid_y = move_y + (ally.row - target.row) * CELL_HEIGHT
+                    expected_point = (
+                        move_x + ally_x - ally_grid_x,
+                        move_y + ally_y - ally_grid_y,
+                    )
+                    pixel_reached = any(
+                        (point[0] - expected_point[0]) ** 2
+                        + (point[1] - expected_point[1]) ** 2
+                        <= 75**2
+                        and (point[0] - ally_x) ** 2
+                        + (point[1] - ally_y) ** 2
+                        >= 75**2
+                        for point in post_points
+                    )
+                    logger.debug(
+                        "移动清层像素验证: "
+                        f"原位置=({ally_x},{ally_y}), "
+                        f"预测位置={expected_point}, 实际我方={post_points}"
+                    )
                     if reached_target and not still_at_origin:
                         logger.info(
-                            f"移动确认成功: 我方已从 ({ally.row}, {ally.col}) "
-                            f"到达 ({target.row}, {target.col})"
+                            f"移动确认成功: 清层后我方已从 "
+                            f"({ally.row}, {ally.col}) 到达 "
+                            f"({target.row}, {target.col})"
                         )
                         return True, False
-                else:
-                    after_target_red = self._red_bar_pixels(
-                        after_img, target_bar_point
-                    )
-                    required_drop = max(8, int(before_target_red * 0.08))
-                    if after_target_red <= before_target_red - required_drop:
+                    if pixel_reached:
                         logger.info(
-                            "攻击确认成功: 目标红色状态条像素 "
-                            f"{before_target_red} -> {after_target_red}"
+                            "移动确认成功: 新我方状态条已到达目标蓝格的"
+                            f"局部预测位置 {expected_point}"
                         )
                         return True, False
+            else:
+                after_target_red = self._red_bar_pixels(
+                    after_img, target_bar_point
+                )
+                required_drop = max(8, int(before_target_red * 0.08))
+                if after_target_red <= before_target_red - required_drop:
+                    logger.info(
+                        "攻击确认成功: 目标红色状态条像素 "
+                        f"{before_target_red} -> {after_target_red}"
+                    )
+                    return True, False
 
         logger.warning(
             f"{label}未得到具体结果确认；拒绝用范围消失或整屏差异"
             f" {last_frame_score:.2f} 作为成功依据"
         )
         return False, False
+
+    @staticmethod
+    def _selected_self_cells(img: Any) -> set[Tuple[int, int]]:
+        """从选中画面的一排蓝色菱形行动点定位我方所在格。"""
+        if img is None or len(img.shape) < 2:
+            return set()
+        height = min(int(img.shape[0]), 1160)
+        width = min(int(img.shape[1]), 720)
+        hsv = cv2.cvtColor(img[:height, :width], cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, (95, 80, 130), (125, 255, 255))
+        _, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+        fragments = []
+        for x, y, box_width, box_height, area in stats[1:]:
+            if (
+                6 <= box_width <= 13
+                and 5 <= box_height <= 9
+                and 18 <= area <= 110
+            ):
+                fragments.append(
+                    (
+                        int(x),
+                        int(y),
+                        int(box_width),
+                        int(box_height),
+                    )
+                )
+
+        y_groups: List[List[Tuple[int, int, int, int]]] = []
+        for fragment in sorted(
+            fragments, key=lambda item: item[1] + item[3] // 2
+        ):
+            center_y = fragment[1] + fragment[3] // 2
+            group = next(
+                (
+                    candidate
+                    for candidate in y_groups
+                    if abs(
+                        center_y
+                        - sum(
+                            item[1] + item[3] // 2 for item in candidate
+                        )
+                        / len(candidate)
+                    )
+                    <= 3
+                ),
+                None,
+            )
+            if group is None:
+                y_groups.append([fragment])
+            else:
+                group.append(fragment)
+
+        cells: set[Tuple[int, int]] = set()
+        for group in y_groups:
+            sequence: List[Tuple[int, int, int, int]] = []
+            for fragment in sorted(group, key=lambda item: item[0]):
+                if sequence:
+                    previous = sequence[-1]
+                    center_gap = (
+                        fragment[0]
+                        + fragment[2] // 2
+                        - previous[0]
+                        - previous[2] // 2
+                    )
+                    if not 10 <= center_gap <= 22:
+                        if len(sequence) >= 3:
+                            AutoFightProcessor._append_selected_cell(
+                                cells, sequence
+                            )
+                        sequence = []
+                sequence.append(fragment)
+            if len(sequence) >= 3:
+                AutoFightProcessor._append_selected_cell(cells, sequence)
+        return cells
+
+    @staticmethod
+    def _append_selected_cell(
+        cells: set[Tuple[int, int]],
+        sequence: List[Tuple[int, int, int, int]],
+    ) -> None:
+        """校验一排菱形的尺寸，并把其中心换算成局部网格。"""
+        left = sequence[0][0]
+        right = sequence[-1][0] + sequence[-1][2]
+        if not 30 <= right - left <= 90:
+            return
+        center_x = (left + right) // 2
+        center_y = int(
+            sum(item[1] + item[3] // 2 for item in sequence)
+            / len(sequence)
+        )
+        row = center_y // CELL_HEIGHT
+        col = center_x // CELL_WIDTH
+        if 0 <= row < ROWS and 0 <= col < COLS:
+            cells.add((row, col))
 
     @staticmethod
     def _red_bar_pixels(img: Any, point: Tuple[int, int]) -> int:
@@ -1609,10 +3079,26 @@ class AutoFightProcessor(CustomAction):
                 return True
             result = context.run_task("Battle_ToggleThreat")
             clicked = self._task_result_has_hit(result, {"Battle_ToggleThreat"})
-            logger.info(
+            logger.debug(
                 f"危险覆盖层切换为 {'开启' if enabled else '关闭'} "
                 f"({attempt}/2): click={clicked}"
             )
+            if not clicked:
+                continue
+
+            # 开关有淡入淡出动画。点击后轮询到目标状态再决定是否重试，
+            # 避免 300ms 内识别到旧画面后再次点击，把刚关闭的红层重新打开。
+            deadline = time.monotonic() + 1.4
+            while time.monotonic() < deadline:
+                time.sleep(0.15)
+                settled_img = self._screencap(context)
+                if settled_img is None:
+                    continue
+                settled = context.run_recognition(
+                    "Battle_ThreatToggleOn", settled_img
+                ).hit
+                if settled == enabled:
+                    return True
 
         final_img = self._screencap(context)
         verified = bool(
@@ -1753,7 +3239,7 @@ class AutoFightProcessor(CustomAction):
                 row_values.append(base)
             matrix_lines.append(" ".join(row_values))
 
-        logger.info(
+        logger.debug(
             "统一矩阵 (A=当前, E=敌人, F=友军, S=我方, 1=可攻击, 2=可移动):\n"
             + "\n".join(matrix_lines)
         )

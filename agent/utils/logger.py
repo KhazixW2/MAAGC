@@ -4,13 +4,17 @@ import sys
 try:
     from loguru import logger as _logger
 
-    def setup_logger(log_dir="debug/custom", console_level="INFO"):
+    def setup_logger(log_dir=None, console_level=None):
         """设置 loguru logger
 
         Args:
             log_dir: 日志文件目录
             console_level: 控制台输出等级 (DEBUG, INFO, WARNING, ERROR)
         """
+        log_dir = log_dir or os.environ.get("MAAGC_DEBUG_LOG_DIR", "debug/custom")
+        console_level = console_level or os.environ.get(
+            "MAAGC_CONSOLE_LOG_LEVEL", "INFO"
+        )
         os.makedirs(log_dir, exist_ok=True)
         _logger.remove()
 
@@ -47,11 +51,11 @@ try:
             encoding="utf-8",
             enqueue=True,
             backtrace=True,  # 包含完整的异常回溯信息
-            diagnose=True,  # 包含变量值信息
+            diagnose=False,
         )
         return _logger
 
-    def change_console_level(level="DEBUG"):
+    def change_console_level(level="INFO"):
         """动态修改控制台日志等级"""
         setup_logger(console_level=level)
         _logger.info(f"控制台日志等级已更改为: {level}")

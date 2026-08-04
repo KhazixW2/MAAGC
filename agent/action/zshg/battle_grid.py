@@ -192,10 +192,10 @@ class GridScanner:
                 ]
                 rejected = before_count - len(unit_cells)
                 if rejected:
-                    logger.info(
+                    logger.debug(
                         f"{node_name}: 剔除 {rejected} 个无生命数字的红色碎片"
                     )
-            logger.info(
+            logger.debug(
                 f"{node_name}: 原始色块={len(boxes)}, 状态条单位={len(unit_cells)}"
             )
 
@@ -220,7 +220,7 @@ class GridScanner:
                     cell.target_center = (target_x, target_y)
 
         accepted_count = sum(cell.cell_type != CellType.NONE for cell in grid)
-        logger.info(f"当前战场快照接受单位数: {accepted_count}")
+        logger.debug(f"当前战场快照接受单位数: {accepted_count}")
         return img
 
     def _find_status_bar_cells(
@@ -573,7 +573,7 @@ class GridScanner:
             accepted.append((enemy.row, enemy.col, center_x, bar_y))
 
         if accepted:
-            logger.info(f"黄色角标确认可攻击敌人: {accepted}")
+            logger.debug(f"黄色角标确认可攻击敌人: {accepted}")
 
 
 # ========================

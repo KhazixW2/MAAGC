@@ -5,6 +5,7 @@ import time
 from typing import Any, Optional, Set
 
 from utils import logger
+from action.zshg.battle_world_map import BattleSessionRegistry, session_key
 from action.zshg.task_hud_recognizer import TaskHudRecognizer
 
 
@@ -19,18 +20,29 @@ def Map_CheckCurrentMonth(context: Context) -> int:
         int: 月份的整数表示，范围为 1 到 12
     """
 
+    screenshot = context.tasker.controller.post_screencap().wait().get()
+    candidates = []
     for i in range(1, 13):
-        if recoDetail := context.run_recognition(
+        reco_detail = context.run_recognition(
             "Map_GetMonth",
-            context.tasker.controller.post_screencap().wait().get(),
+            screenshot,
             pipeline_override={
                 "Map_GetMonth": {
                     "template": f"UI/month/{i}.png",
+                    # 当前月份会沿钟盘旋转，因此必须覆盖整圈；下面会比较
+                    # 全部命中的得分，避免按月份顺序误取静态刻度“6”。
+                    "roi": [58, 2, 610, 221],
                 }
             },
-        ).hit:
-            logger.info(f"当前游戏月份为：{i}月")
-            return i
+        )
+        if not reco_detail.hit or reco_detail.best_result is None:
+            continue
+        score = float(getattr(reco_detail.best_result, "score", 0.0))
+        candidates.append((score, i))
+    if candidates:
+        score, month = max(candidates)
+        logger.info(f"当前游戏月份为：{month}月 (模板得分={score:.3f})")
+        return month
     logger.error("未识别到当前游戏月份")
     return -1
 
@@ -94,6 +106,217 @@ def ensure_task_accepted(context: Context) -> bool:
         return True
 
     return False
+
+
+def open_city_task_panel(context: Context, max_steps: int = 12) -> bool:
+    """有界进入主城任务板，并处理自由日/旅行等中间页。
+
+    旧 ``OpenCityTaskPanel`` Pipeline 会在自由日城市选择框中反复命中
+    ``EnterCity``，但它的点击偏移只适用于大地图城堡图标，最终形成
+    无上限的 ``EnterCity -> OpenCityTaskPanel`` 循环。这里逐步观察页面，
+    每个动作后重新识别；同一状态连续三次没有变化就停止交给月度恢复。
+    """
+    last_state = ""
+    repeated_state = 0
+
+    def accept_state(state: str) -> bool:
+        nonlocal last_state, repeated_state
+        if state == last_state:
+            repeated_state += 1
+        else:
+            last_state = state
+            repeated_state = 1
+        if repeated_state >= 3:
+            logger.error(f"进入任务板状态连续无变化: {state}")
+            return False
+        return True
+
+    for step in range(max_steps):
+        img = _screencap(context)
+        if img is None:
+            return False
+        if context.run_recognition("InTaskPannel", img).hit:
+            logger.info(f"主城任务板已就绪 ({step + 1}/{max_steps})")
+            return True
+
+        if context.run_recognition("TravelDialog", img).hit:
+            state = "travel_dialog"
+            if not accept_state(state):
+                return False
+            logger.info("进入任务板途中出现旅行弹窗，选择有界步行兜底")
+            if not _task_succeeded(context.run_task("TravelDialog_ChooseSlow")):
+                return False
+            time.sleep(0.5)
+            continue
+
+        go_button = context.run_recognition("FreeDayGoButton", img)
+        if go_button.hit:
+            state = "free_day"
+            if not accept_state(state):
+                return False
+            city = context.run_recognition("EnterCity", img)
+            if not city.hit or city.best_result is None:
+                logger.error("自由日城市列表中没有识别到目标城市")
+                return False
+            _, city_y, _, city_height = (
+                int(value) for value in city.best_result.box
+            )
+            city_center_y = city_y + city_height // 2
+            candidates = (
+                go_button.filtered_results
+                if go_button.filtered_results
+                else [go_button.best_result]
+            )
+            candidates = [item for item in candidates if item is not None]
+            if not candidates:
+                return False
+            button = min(
+                candidates,
+                key=lambda item: abs(
+                    int(item.box[1]) + int(item.box[3]) // 2 - city_center_y
+                ),
+            )
+            button_x, button_y, button_width, button_height = (
+                int(value) for value in button.box
+            )
+            button_center_y = button_y + button_height // 2
+            if abs(button_center_y - city_center_y) > 70:
+                logger.error("自由日目标城市同一行没有可信的前去按钮")
+                return False
+            button_x += button_width // 2
+            button_y = button_center_y
+            clicked = (
+                context.tasker.controller.post_click(button_x, button_y)
+                .wait()
+                .succeeded
+            )
+            logger.info(
+                "自由日按同行按钮进入目标城市: "
+                f"({button_x}, {button_y}), succeeded={clicked}"
+            )
+            if not clicked:
+                return False
+            time.sleep(1.0)
+            continue
+
+        if context.run_recognition("EnterCity_Confirm", img).hit:
+            state = "enter_confirm"
+            if not accept_state(state):
+                return False
+            if not _task_succeeded(context.run_task("EnterCity_Confirm")):
+                return False
+            continue
+
+        if context.run_recognition("FindCityTask_OCR", img).hit:
+            state = "task_entry"
+            if not accept_state(state):
+                return False
+            if not _task_succeeded(context.run_task("FindCityTask_OCR")):
+                return False
+            continue
+
+        if context.run_recognition("SwitchInnerCity", img).hit:
+            state = "switch_inner"
+            if not accept_state(state):
+                return False
+            if not _task_succeeded(context.run_task("SwitchInnerCity")):
+                return False
+            continue
+
+        if context.run_recognition("EnterCity", img).hit:
+            state = "open_city_list"
+            if not accept_state(state):
+                return False
+            if not _task_succeeded(context.run_task("EnterCity")):
+                return False
+            continue
+
+        logger.error(
+            f"进入任务板遇到未知画面 ({step + 1}/{max_steps})，停止盲点"
+        )
+        return False
+
+    logger.error(f"进入任务板超过有界步数 {max_steps}")
+    return False
+
+
+def abandon_noncombat_accepted_task(context: Context, max_swipes: int = 5) -> bool:
+    """在当前主城任务板中放弃已接取的采购/配送任务。
+
+    仅点击同时满足以下条件的任务：描述命中明确的非战斗关键词，且按钮
+    OCR 为“放弃”。可领取的同类任务按钮是“接受”，不会被误点。
+    """
+    img = _screencap(context)
+    if img is None:
+        return False
+    if not context.run_recognition("TaskQuickLocation", img).hit:
+        return True
+
+    logger.info("检测到已接取任务，进入主城任务板校验任务类型")
+    if context.run_recognition("UI_TaskPannelPageClose", img).hit:
+        if not _task_succeeded(context.run_task("UI_TaskPannelPageClose")):
+            return False
+
+    if not open_city_task_panel(context):
+        logger.error("无法打开当前主城任务板校验已接取任务")
+        return False
+
+    recognizer = TaskHudRecognizer()
+    for swipe_index in range(max_swipes + 1):
+        board_img = _screencap(context)
+        if board_img is None:
+            return False
+        tasks = recognizer.recognize_tasks(context, board_img)
+        for task in tasks:
+            keyword = recognizer.non_combat_keyword(task)
+            if keyword is None or "放弃" not in task.action_text:
+                continue
+            if task.accept_button_box is None:
+                continue
+
+            logger.warning(
+                f"放弃已接取非战斗任务: {task.task_name} | "
+                f"{task.task_type} | 关键词={keyword}"
+            )
+            box = task.accept_button_box
+            x, y = box[0] + box[2] // 2, box[1] + box[3] // 2
+            if not context.tasker.controller.post_click(x, y).wait().succeeded:
+                return False
+            time.sleep(0.5)
+
+            confirm_img = _screencap(context)
+            if confirm_img is None:
+                return False
+            if context.run_recognition("PopUpWindowConfirm", confirm_img).hit:
+                if not _task_succeeded(context.run_task("PopUpWindowConfirm")):
+                    return False
+                time.sleep(0.5)
+            else:
+                # 当前版本点击“放弃”会直接把按钮改回“接受”，没有确认框。
+                # 重新识别任务板证明原任务已不再处于“放弃”状态后才继续。
+                remaining = any(
+                    visible.task_name == task.task_name
+                    and "放弃" in visible.action_text
+                    for visible in recognizer.recognize_tasks(context, confirm_img)
+                )
+                if remaining:
+                    logger.error("非战斗任务仍显示为已接取，放弃动作未生效")
+                    return False
+                logger.info("非战斗任务已直接放弃（当前版本无二次确认框）")
+            tip_img = _screencap(context)
+            if tip_img is not None and context.run_recognition(
+                "PopUpWindowTip", tip_img
+            ).hit:
+                context.run_task("PopUpWindowTip")
+            context.run_task("BackButton_500ms")
+            return ensure_at_bigmap(context)
+
+        if swipe_index < max_swipes:
+            context.run_task("FindCityTask_SwipeDown")
+
+    logger.info("当前已接取任务未命中采购/配送规则，保留并继续执行")
+    context.run_task("BackButton_500ms")
+    return ensure_at_bigmap(context)
 
 
 def start_task(context: Context) -> bool:
@@ -165,13 +388,9 @@ def _preprocess_accept_task(context: Context) -> bool:
     # 左右滑动会快速锁定当前任务城市的主城
     # context.run_task("Map_MoveMainCityLeft")
     # context.run_task("Map_MoveMainCityRight")
-    context.run_task("OpenCityTaskPanel")
-    if context.run_recognition(
-        "InTaskPannel", context.tasker.controller.post_screencap().wait().get()
-    ).hit:
-        return _accept_new_task(context)
-    else:
+    if not open_city_task_panel(context):
         return False
+    return _accept_new_task(context)
 
 
 def _accept_new_task(context: Context) -> bool:
@@ -185,40 +404,55 @@ def _accept_new_task(context: Context) -> bool:
         bool: 接取成功返回 True
     """
     max_swipe_times = 5
-    swipe_count = 0
 
     # HUD动态识别器 - 默认筛选阈值 120级以下
     hud_recognizer = TaskHudRecognizer()
     hud_max_level = 120
 
-    while swipe_count <= max_swipe_times:
-        screenshot = context.tasker.controller.post_screencap().wait().get()
+    def scan_current_pool() -> bool:
+        # 任务板会保留上一个月的滚动位置。如果上次扫到了列表底部，
+        # 继续单向下滑只会在原地重复识别。每轮先有界地回到顶部，
+        # 再按既有方向扫到底，保证 HUD 覆盖整个任务池。
+        for _ in range(max_swipe_times):
+            context.run_task("FindCityTask_SwipeUp")
 
-        # 优先使用HUD动态识别器识别任务
-        best_task = hud_recognizer.recognize_and_get_best_task(
-            context, screenshot, max_level=hud_max_level
-        )
-
-        if best_task and best_task.accept_button_box:
-            accept_box = best_task.accept_button_box
-            # accept_box 是 [x, y, w, h] 列表
-            accept_x = accept_box[0] + accept_box[2] // 2
-            accept_y = accept_box[1] + accept_box[3] // 2
-            context.tasker.controller.post_click(accept_x, accept_y).wait()
-            time.sleep(0.5)
-            return True
-
-        # HUD识别失败，滑动刷新
-        if swipe_count < max_swipe_times:
-            logger.info(
-                f"HUD未识别到有效任务，正在滑动刷新... ({swipe_count + 1}/{max_swipe_times})"
+        for swipe_count in range(max_swipe_times + 1):
+            screenshot = context.tasker.controller.post_screencap().wait().get()
+            best_task = hud_recognizer.recognize_and_get_best_task(
+                context, screenshot, max_level=hud_max_level
             )
-            context.run_task("FindCityTask_SwipeDown")
-            swipe_count += 1
-        else:
-            logger.error("HUD识别多次失败，未检测到可接取的任务")
-            return False
 
+            if best_task and best_task.accept_button_box:
+                accept_box = best_task.accept_button_box
+                accept_x = accept_box[0] + accept_box[2] // 2
+                accept_y = accept_box[1] + accept_box[3] // 2
+                context.tasker.controller.post_click(accept_x, accept_y).wait()
+                time.sleep(0.5)
+                return True
+
+            if swipe_count < max_swipe_times:
+                logger.info(
+                    f"HUD未识别到有效任务，正在滑动刷新... "
+                    f"({swipe_count + 1}/{max_swipe_times})"
+                )
+                context.run_task("FindCityTask_SwipeDown")
+        return False
+
+    if scan_current_pool():
+        return True
+
+    # 整个列表只有黑名单、保护或非战斗任务时，使用页面提供的
+    # 10 水晶刷新一次，然后从顶部重新扫描。单次调用最多消耗一次，
+    # 年度层仍保留自己的两次月度上限，不会无界刷新。
+    logger.warning("HUD扫完整个任务池仍无候选，尝试水晶刷新一次")
+    refresh_result = context.run_task("FindCityTask_Refresh")
+    if not _task_succeeded(refresh_result):
+        logger.error("任务池刷新节点执行失败")
+        return False
+    if scan_current_pool():
+        return True
+
+    logger.error("刷新任务池后仍未检测到可接取的任务")
     return False
 
 
@@ -273,6 +507,31 @@ def _process_pre(context: Context) -> bool:
         return False
     if not _task_succeeded(context.run_task("TaskDetailFight")):
         logger.error("点击进入战斗失败")
+        detail_img = _screencap(context)
+        if detail_img is not None and context.run_recognition(
+            "TravelDialog", detail_img
+        ).hit:
+            logger.warning("任务定位打开了旅行弹窗，当前任务不是就地战斗任务")
+            context.run_task("TravelDialog_Close")
+            return False
+        abandon = (
+            context.run_recognition("TaskClaim", detail_img)
+            if detail_img is not None
+            else None
+        )
+        if abandon and abandon.hit:
+            logger.warning("任务详情没有进入战斗，放弃当前非战斗/异常任务")
+            if _task_succeeded(context.run_task("TaskClaim")):
+                time.sleep(0.5)
+                confirm_img = _screencap(context)
+                if (
+                    confirm_img is not None
+                    and context.run_recognition(
+                        "PopUpWindowConfirm", confirm_img
+                    ).hit
+                ):
+                    context.run_task("PopUpWindowConfirm")
+                time.sleep(0.5)
         return False
     return True
 
@@ -286,26 +545,40 @@ def _process_fighting(context: Context) -> bool:
         {"start", "ready", "victory", "fail"},
         timeout=5.0,
     )
+    battle_session_key = session_key(context)
     if initial_state == "victory":
         logger.info("进入主动战斗前已识别到胜利结算页")
+        BattleSessionRegistry.end(battle_session_key)
         return True
     if initial_state == "fail":
         logger.error("进入主动战斗前已识别到失败结算页")
+        BattleSessionRegistry.end(battle_session_key)
         return False
+    entered_from_start = initial_state == "start"
     if initial_state == "start":
         initial_state = _start_battle_and_wait_ready(context)
 
     if initial_state == "victory":
         logger.info("战斗开始后直接进入胜利结算页")
+        BattleSessionRegistry.end(battle_session_key)
         return True
     if initial_state == "fail":
         logger.error("战斗开始后直接进入失败结算页")
+        BattleSessionRegistry.end(battle_session_key)
         return False
     if initial_state != "ready":
         logger.error("等待稳定战斗界面超时，未识别到结束回合按钮")
         return False
 
-    logger.info("稳定战斗界面已就绪，接入 AutoFightProcessor")
+    session = BattleSessionRegistry.begin(
+        battle_session_key,
+        force_new=entered_from_start,
+    )
+    logger.info(
+        "稳定战斗界面已就绪，接入 AutoFightProcessor: "
+        f"new={entered_from_start}, confirmed_rounds={session.confirmed_rounds}, "
+        f"explored={len(session.world.observed)}"
+    )
     auto_result = context.run_task("AutoFight_Start")
 
     # CustomAction 返回后仍以持久结算页为最终依据，避免仅凭节点被尝试过
@@ -317,9 +590,11 @@ def _process_fighting(context: Context) -> bool:
     )
     if terminal_state == "victory":
         logger.info("AutoFightProcessor 已完成正式战斗并识别到胜利结算页")
+        BattleSessionRegistry.end(battle_session_key)
         return True
     if terminal_state == "fail":
         logger.error("AutoFightProcessor 结束后识别到战斗失败结算页")
+        BattleSessionRegistry.end(battle_session_key)
         return False
     if not _task_succeeded(auto_result):
         logger.error("AutoFightProcessor 执行失败，且未出现胜负结算页")

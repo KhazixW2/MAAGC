@@ -549,6 +549,213 @@
         "post_delay": 500,
         "timeout": 2000
     },
+    "Event_PirateRaid": {
+        "recognition": "OCR",
+        "expected": [
+            "海盗正在袭扰"
+        ],
+        "roi": [
+            180,
+            195,
+            360,
+            170
+        ],
+        "timeout": 2000,
+        "next": [
+            "Event_PirateRaid_Dispatch"
+        ]
+    },
+    "Event_PirateRaid_Dispatch": {
+        "recognition": "DirectHit",
+        "action": "Custom",
+        "custom_action": "PirateRaidProcessor",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_PirateRaid_ClickBanner": {
+        "recognition": "OCR",
+        "expected": [
+            "海盗正在袭扰"
+        ],
+        "roi": [
+            180,
+            195,
+            360,
+            170
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_PirateRaid_PreparePage": {
+        "recognition": "OCR",
+        "expected": [
+            "海盗侵袭"
+        ],
+        "roi": [
+            270,
+            488,
+            320,
+            60
+        ],
+        "timeout": 2000
+    },
+    "Event_PirateRaid_EnterBattle": {
+        "recognition": "OCR",
+        "expected": [
+            "进入战斗"
+        ],
+        "roi": [
+            200,
+            960,
+            320,
+            100
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_PirateRaid_SailingDialog": {
+        "recognition": "OCR",
+        "expected": [
+            "瑞格群岛"
+        ],
+        "roi": [
+            200,
+            570,
+            350,
+            100
+        ],
+        "max_hit": 6,
+        "timeout": 2000
+    },
+    "Event_PirateRaid_SailingConfirm": {
+        "recognition": "OCR",
+        "expected": [
+            "确定"
+        ],
+        "roi": [
+            450,
+            650,
+            220,
+            120
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_PirateRaid_BattlePage": {
+        "recognition": "OCR",
+        "expected": [
+            "战斗开始"
+        ],
+        "roi": [
+            200,
+            1180,
+            320,
+            100
+        ],
+        "timeout": 2000
+    },
+    "Event_PirateRaid_BattleStart": {
+        "recognition": "OCR",
+        "expected": [
+            "战斗开始"
+        ],
+        "roi": [
+            200,
+            1180,
+            320,
+            100
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_PirateRaid_VictoryConfirm": {
+        "recognition": "OCR",
+        "expected": [
+            "确定"
+        ],
+        "roi": [
+            180,
+            850,
+            360,
+            330
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "next": [
+            "Event_PirateRaid_VictoryConfirm",
+            "[JumpBack]Event_PirateRaid_ArchipelagoBack"
+        ]
+    },
+    "Event_PirateRaid_ArchipelagoBack": {
+        "recognition": "OCR",
+        "expected": [
+            "前往大陆"
+        ],
+        "roi": [
+            297,
+            1228,
+            125,
+            52
+        ],
+        "timeout": 2000,
+        "next": [
+            "ClickGoToContinent"
+        ]
+    },
+    "Event_PirateRaid_TravelDialog": {
+        "recognition": "OCR",
+        "expected": [
+            "瑞格群岛"
+        ],
+        "roi": [
+            200,
+            540,
+            320,
+            120
+        ],
+        "timeout": 2000
+    },
+    "Event_PirateRaid_ChooseEstate": {
+        "recognition": "OCR",
+        "expected": [
+            "庄园传送"
+        ],
+        "roi": [
+            100,
+            690,
+            220,
+            70
+        ],
+        "order_by": "Vertical",
+        "target": true,
+        "target_offset": [
+            360,
+            55,
+            0,
+            0
+        ],
+        "action": "Click",
+        "post_delay": 2500,
+        "timeout": 2000
+    },
+    "Event_PirateRaid_ChooseSailSingle": {
+        "doc": "海盗事件切群岛时的单行航海弹窗；调用前必须已命中 Event_PirateRaid_TravelDialog 且没有庄园传送选项",
+        "recognition": "DirectHit",
+        "action": "Click",
+        "target": [
+            470,
+            670,
+            140,
+            100
+        ],
+        "post_delay": 2500,
+        "timeout": 2000
+    },
     "事件_孩子夭折了": {
         "recognition": "OCR",
         "expected": [
