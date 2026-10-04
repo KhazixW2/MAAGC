@@ -722,14 +722,14 @@
         ],
         "action": "Click",
         "target": [
-            480,
-            1044,
+            389,
+            1051,
             90,
             90
         ],
         "post_delay": 1200,
         "timeout": 2000,
-        "focus": "浮窗里选「帕格维斯」（群岛）。expected 由「瑞格群岛」改为「帕格维斯」：浮窗里显示的是岛屿名而不是区域名，旧值永不命中"
+        "focus": "浮窗选右槽「帕格维斯」。target 对准 OCR 实测文字中心 (434,1096)，旧值 [250,995,90,90] 偏左偏上"
     },
     "Event_PirateRaid_RegionSwitch": {
         "recognition": "DirectHit",
@@ -755,10 +755,7 @@
         "timeout": 3000
     },
     "Event_PirateRaid_PickContinent": {
-        "recognition": "OCR",
-        "expected": [
-            "加尔提兰"
-        ],
+        "recognition": "DirectHit",
         "roi": [
             200,
             1015,
@@ -767,14 +764,14 @@
         ],
         "action": "Click",
         "target": [
-            240,
-            1044,
+            245,
+            1051,
             90,
             90
         ],
-        "post_delay": 1200,
+        "post_delay": 1600,
         "timeout": 2000,
-        "focus": "浮窗里选「加尔提兰」（大陆）。target 对准实测图标中心 (285,1089)：旧值 [250,995,90,90] 的 y 范围是 995~1085，比真实图标高约 50 像素，点不到"
+        "focus": "浮窗左槽（群岛时=加尔提兰）改为 DirectHit 盲点：实测浮窗弹出有延迟，OCR 常在动画未完成时扫空；左槽在「需要回大陆」的场景下恒为加尔提兰，故不需要识别，直接点实测文字中心 (290,1096)"
     },
     "Event_PirateRaid_RegionSwitchContinent": {
         "recognition": "DirectHit",
