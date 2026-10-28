@@ -1,5 +1,5 @@
 loguru==0.7.2
-maafw==5.10.5
+maafw==5.14.3
 opencv-python
 numpy
 jsonschema
