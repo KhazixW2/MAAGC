@@ -86,6 +86,10 @@
     "Flag_GrowthTrialMode": {
         "enabled": false
     },
+    "MarketPurchasePlan": {
+        "recognition": "OCR",
+        "expected": [""]
+    },
     "Auto_WeddingTask": {
         "recognition": "DirectHit",
         "action": "Custom",

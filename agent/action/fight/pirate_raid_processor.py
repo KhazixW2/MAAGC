@@ -21,12 +21,16 @@ from utils import logger
 import action.fight.fight_utils as fight_utils
 
 
-# 群岛层就绪信号：底部出现「前往大陆」按钮。
+# 群岛层就绪信号：底部出现「前往大陆」按钮，或底栏页签显示「瑞格群岛」。
 ARCHIPELAGO_READY_NODE = "ClickGoToContinent"
+# 2026-09-26 19:32 实测：大陆层底栏页签显示的是当前地区名（「加尔提兰」），
+# 并不是「前往群岛」，所以旧的就绪信号在海盗事件里既判不出来、也点不动，
+# 连续 8 次点击失败 → 恢复超过有界步数 → 第 6/240 个月把整条年度任务归零。
+ARCHIPELAGO_READY_NODES = ("ClickGoToContinent", "MapTabArchipelago")
 BATTLE_READY_NODE = "Event_PirateRaid_BattlePage"
 ACTIVE_BATTLE_NODE = "FightEndRound"
-# 大陆层就绪信号：底部出现「前往群岛」按钮，或 EnterCity 主城可见。
-CONTINENT_READY_NODES = ("ClickGoToArchipelago", "EnterCity")
+# 大陆层就绪信号：底栏页签显示「加尔提兰」、可见「前往群岛」，或 EnterCity 主城可见。
+CONTINENT_READY_NODES = ("ClickGoToArchipelago", "EnterCity", "MapTabContinent")
 LAYER_SWITCH_TIMEOUT = 10.0
 
 
@@ -121,6 +125,11 @@ def _wait_for_layer_ready(
     return False
 
 
+def _any_ready(context: Context, nodes, img) -> bool:
+    """任一就绪信号命中即算到达该层。"""
+    return any(context.run_recognition(node, img).hit for node in nodes)
+
+
 def _tap(context: Context, node: str, label: str) -> bool:
     """点击节点并验证成功。"""
     result = context.run_task(node)
@@ -165,7 +174,7 @@ class PirateRaidProcessor(CustomAction):
         already_archipelago = bool(
             initial_img is not None
             and not initial_dialog
-            and context.run_recognition(ARCHIPELAGO_READY_NODE, initial_img).hit
+            and _any_ready(context, ARCHIPELAGO_READY_NODES, initial_img)
         )
 
         if initial_dialog:
@@ -174,7 +183,7 @@ class PirateRaidProcessor(CustomAction):
                 return CustomAction.RunResult(success=False)
             if not _wait_for_layer_ready(
                 context,
-                (ARCHIPELAGO_READY_NODE, BATTLE_READY_NODE, ACTIVE_BATTLE_NODE),
+                ARCHIPELAGO_READY_NODES + (BATTLE_READY_NODE, ACTIVE_BATTLE_NODE),
                 LAYER_SWITCH_TIMEOUT,
                 "群岛/战斗准备",
             ):
@@ -188,9 +197,9 @@ class PirateRaidProcessor(CustomAction):
             in_active_battle = context.run_recognition(
                 ACTIVE_BATTLE_NODE, resumed_img
             ).hit
-            already_archipelago = context.run_recognition(
-                ARCHIPELAGO_READY_NODE, resumed_img
-            ).hit
+            already_archipelago = _any_ready(
+                context, ARCHIPELAGO_READY_NODES, resumed_img
+            )
 
         if at_victory:
             logger.info("海盗事件：当前已在战斗胜利页，从结算继续")
@@ -205,12 +214,18 @@ class PirateRaidProcessor(CustomAction):
                 logger.error("海盗事件：无法回到大地图，放弃")
                 return CustomAction.RunResult(success=False)
             if not _tap(context, "ClickGoToArchipelago", "切群岛"):
-                return CustomAction.RunResult(success=False)
+                # 2026-09-26 19:32 实测：大陆层底栏页签显示的是当前地区名
+                # 「加尔提兰」而不是「前往群岛」，这里连续 8 次点击失败后
+                # 恢复超过有界步数，第 6/240 个月把整条年度任务归零。
+                # 兜底：改走地区切换浮窗（点底栏页签 → 选「瑞格群岛」）。
+                logger.info("海盗事件：底栏没有「前往群岛」，改走地区切换浮窗")
+                if not _tap(context, "Event_PirateRaid_GoArchipelago", "切群岛(浮窗)"):
+                    return CustomAction.RunResult(success=False)
             # 海盗袭击期间，单行航海确认后可能直接落到战斗准备页，
             # 也可能先落到群岛地图；二者都是合法的切层终态。
             if not _wait_for_layer_ready(
                 context,
-                (ARCHIPELAGO_READY_NODE, BATTLE_READY_NODE),
+                ARCHIPELAGO_READY_NODES + (BATTLE_READY_NODE,),
                 LAYER_SWITCH_TIMEOUT,
                 "群岛/战斗准备",
             ):
@@ -224,9 +239,9 @@ class PirateRaidProcessor(CustomAction):
             in_active_battle = context.run_recognition(
                 ACTIVE_BATTLE_NODE, switched_img
             ).hit
-            already_archipelago = context.run_recognition(
-                ARCHIPELAGO_READY_NODE, switched_img
-            ).hit
+            already_archipelago = _any_ready(
+                context, ARCHIPELAGO_READY_NODES, switched_img
+            )
 
         # 2. 走「点横幅 → 准备页 → 进入战斗 → 航海 → 战斗画面 →
         #    战斗开始 → AutoFightProcessor」的 pipeline 链。
@@ -261,7 +276,10 @@ class PirateRaidProcessor(CustomAction):
         if not _tap(context, "Event_PirateRaid_VictoryConfirm", "结算"):
             logger.warning("海盗事件：战利品/经验结算未完成，但继续切回大陆")
         if not _wait_for_layer_ready(
-            context, ("Event_PirateRaid_ArchipelagoBack",), 10.0, "群岛(战结)"
+            context,
+            ("Event_PirateRaid_ArchipelagoBack", "MapTabArchipelago"),
+            10.0,
+            "群岛(战结)",
         ):
             logger.warning("海盗事件：未确认回到群岛层，仍尝试切回大陆")
 
@@ -282,7 +300,13 @@ class PirateRaidProcessor(CustomAction):
             logger.info("恢复大陆：当前已经在大陆层")
             return True
         if not _tap(context, "ClickGoToContinent", "切大陆"):
-            return False
+            # 与切群岛完全对称的问题（2026-09-26 19:53 实测）：身在群岛时
+            # 底栏页签显示的是当前地区名「瑞格群岛」，「前往大陆」永远不中，
+            # 于是切不回去 → 后续「无法到达目标城市: 翠庭」→ 整条年度任务归零。
+            # 兜底：走地区切换浮窗，选「加尔提兰」。
+            logger.info("海盗事件：底栏没有「前往大陆」，改走地区切换浮窗")
+            if not _tap(context, "Event_PirateRaid_GoContinent", "切大陆(浮窗)"):
+                return False
         return _wait_for_layer_ready(
             context, CONTINENT_READY_NODES, LAYER_SWITCH_TIMEOUT, "大陆"
         )

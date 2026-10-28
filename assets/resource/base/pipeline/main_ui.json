@@ -11,6 +11,17 @@
     "timeout": 2000,
     "post_delay": 1000
   },
+  "MallPageHeader": {
+    "recognition": "OCR",
+    "expected": "商城",
+    "roi": [
+      260,
+      0,
+      200,
+      100
+    ],
+    "timeout": 1000
+  },
   "UI_RoleListPage": {
     "recognition": "OCR",
     "expected": [
@@ -552,9 +563,9 @@
     "recognition": "OCR",
     "roi": [
       175,
-      646,
+      600,
       436,
-      148
+      270
     ],
     "expected": [
       "确定"

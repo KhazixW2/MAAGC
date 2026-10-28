@@ -244,37 +244,20 @@
         "timeout": 1500
     },
     "FindCityTask_Refresh": {
-        "recognition": "OCR",
-        "expected": [
-            "刷新"
-        ],
-        "roi": [
-            520,
-            280,
-            170,
-            80
-        ],
-        "action": "Click",
-        "post_delay": 300,
-        "timeout": 2000,
+        "focus": "已替换上游的「刷新任务池」：原实现点「刷新」会消耗水晶（付费资源），年度流程禁止任何水晶/钻石消耗，故改为休息跳月（回大地图→点沙漏→确认），让游戏时间继续推进而不花一分钱",
+        "recognition": "DirectHit",
+        "action": "DoNothing",
         "next": [
-            "FindCityTask_RefreshConfirm"
+            "SkipMonth_Rest"
         ]
     },
     "FindCityTask_RefreshConfirm": {
-        "recognition": "OCR",
-        "expected": [
-            "确定"
-        ],
-        "roi": [
-            400,
-            800,
-            190,
-            120
-        ],
-        "action": "Click",
-        "post_delay": 800,
-        "timeout": 2000
+        "focus": "已替换上游的「刷新确认」：保留节点名以免旧引用断链，实际动作交给 SkipMonth_Rest（休息跳月）",
+        "recognition": "DirectHit",
+        "action": "DoNothing",
+        "next": [
+            "SkipMonth_Rest"
+        ]
     },
     "CheckTaskDetail_OCR": {
         "recognition": "OCR",
@@ -639,19 +622,16 @@
         "timeout": 2000
     },
     "ClickGoToContinent": {
-        "recognition": "OCR",
-        "expected": [
-            "前往大陆"
+        "recognition": "DirectHit",
+        "action": "DoNothing",
+        "post_delay": 300,
+        "timeout": 3000,
+        "next": [
+            "MapTabContinent",
+            "Event_PirateRaid_PickContinent",
+            "[JumpBack]Event_PirateRaid_RegionSwitchContinent"
         ],
-        "roi": [
-            297,
-            1228,
-            125,
-            52
-        ],
-        "action": "Click",
-        "post_delay": 500,
-        "timeout": 2000
+        "focus": "切回大陆（调度器 + 成功闸门）：① MapTabContinent 用底栏大字判断「已经在大陆」→ 成功收尾；② 否则 PickContinent 用 OCR 点选浮窗里的加尔提兰；③ 都没命中才由 [JumpBack]RegionSwitchContinent 点底栏开窗再回 ②。⚠️ 2026-10-07 实测：原先无成功条件，区域其实已切过去而 OCR 一飘就报 failed，agent 记「切换到大陆层的点击节点未成功」→ 整轮 60 个月归零"
     },
     "CastleSwipeDown": {
         "action": "Swipe",

@@ -8,6 +8,39 @@ from utils import logger
 from action.zshg.battle_world_map import BattleSessionRegistry, session_key
 from action.zshg.task_hud_recognizer import TaskHudRecognizer
 
+# 进入主城任务板被模态弹窗挡住时，最多「清掉遮挡事件再重试」的次数。
+TASK_PANEL_EVENT_RESCUES = 3
+# 2026-09-27 00:42/00:43 实测：open_city_task_panel 偶发失败（7.5 秒内静默返回 False），
+# 紧接着的月度重试用同样的流程 7.4 秒就成功了。与其把这个月判失败再整体重试，
+# 不如在原地重新归中城市后重试。
+TASK_PANEL_OPEN_ATTEMPTS = 3
+
+
+def _handle_blocking_event(context: Context) -> bool:
+    """识别并处理一层遮挡界面的模态事件，处理成功返回 True。
+
+    2026-09-26 21:58 实测：佣兵加入 / 孩子成年 / 佣兵退休 / 通用提示这类弹窗会
+    压在城市界面上，让 open_city_task_panel 的画面连续 3 次完全不变
+    （日志：进入任务板状态连续无变化: open_city_list），旧逻辑直接放弃 →
+    第 N/240 个月重试上限，整条 240 月归零。
+
+    fight_processor 依赖本模块，这里用函数内延迟导入避免循环依赖。
+    """
+    img = _screencap(context)
+    if img is None:
+        return False
+    try:
+        from action.fight.fight_processor import detect_and_manage_event
+
+        event_name = detect_and_manage_event(context, img)
+    except Exception as exc:  # 事件处理异常不应打断接任务主流程
+        logger.warning(f"处理遮挡事件异常: {exc}")
+        return False
+    if event_name:
+        logger.info(f"任务板进入受阻，已处理遮挡事件: {event_name}")
+        return True
+    return False
+
 
 def Map_CheckCurrentMonth(context: Context) -> int:
     """
@@ -47,6 +80,60 @@ def Map_CheckCurrentMonth(context: Context) -> int:
     return -1
 
 
+def _at_bigmap(context: Context, img: Any) -> bool:
+    """
+    多锚点判定当前是否在大地图。
+
+    背景（2026-09-26 实测）：原本只用 UI_MainWindows（右下角「佣兵团」图标
+    模板）判大地图，而该图标在部分界面状态下整块不渲染——maafw 日志里同一
+    节点出现过 score=0.399650（阈值 0.700000）的失败，于是明明可行走的大地图
+    也被判成「没回去」，ensure_at_bigmap 静默 8 次失败后整条年度任务归零。
+
+    这里按「先便宜后可靠」的顺序补充大地图专属锚点：
+      1. UI_MainWindows —— 模板匹配，命中只要 1~2ms，是常态快路径；
+      2. UI_TeamPage     —— OCR 底部导航「佣兵团」；
+      3. UI_CastlePage   —— OCR 底部导航「城堡」。
+    2/3 的 ROI 都在底部导航栏内，只有大地图才有该导航栏，因此不会把城里、
+    市场、联姻等页面误判成大地图。
+
+    Args:
+        context: MAA 上下文对象
+        img: 已截好的画面（避免重复截图）
+
+    Returns:
+        bool: 命中任一锚点即返回 True
+    """
+    if context.run_recognition("UI_MainWindows", img).hit:
+        return True
+    if context.run_recognition("UI_TeamPage", img).hit:
+        return True
+    return context.run_recognition("UI_CastlePage", img).hit
+
+
+def _wait_for_bigmap(
+    context: Context, timeout: float, interval: float = 0.4
+) -> bool:
+    """
+    有界等待回到大地图（多锚点版，用于替代只认 UI_MainWindows 的单点等待）。
+
+    Args:
+        context: MAA 上下文对象
+        timeout: 最长等待秒数
+        interval: 每次轮询间隔秒数
+
+    Returns:
+        bool: 超时前识别到大地图返回 True
+    """
+    deadline = time.time() + max(0.5, timeout)
+    while True:
+        img = _screencap(context)
+        if img is not None and _at_bigmap(context, img):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval)
+
+
 def ensure_at_bigmap(
     context: Context, auto_return: bool = True, max_attempts: int = 8
 ) -> bool:
@@ -61,11 +148,12 @@ def ensure_at_bigmap(
         bool: 成功在大地图返回True，否则返回False
     """
     attempts = max(1, max_attempts if auto_return else 1)
-    for _ in range(attempts):
+    for attempt in range(attempts):
         img = _screencap(context)
         if img is None:
+            logger.error("ensure_at_bigmap: 截图失败，无法判断当前界面")
             return False
-        if context.run_recognition("UI_MainWindows", img).hit:
+        if _at_bigmap(context, img):
             return True
         if not auto_return:
             return False
@@ -73,11 +161,20 @@ def ensure_at_bigmap(
         # UI_ReturnBigMap 内含 JumpBack 循环，遇到未知弹窗时会无界等待。
         # 这里只执行可证明、有上限的单步恢复。
         if context.run_recognition("BackButton_500ms", img).hit:
+            action = "右上返回"
             context.run_task("BackButton_500ms")
         else:
+            action = "屏幕中心"
             context.run_task("ClickCenter_500ms")
+        # 这条日志是关键诊断信息：旧版这里完全不打印，导致月度流程卡在
+        # 「接取任务」上时日志里一个字都没有，只能靠 8 秒时长反推。
+        logger.warning(
+            f"ensure_at_bigmap: 第 {attempt + 1}/{attempts} 次尝试仍未回到大地图，"
+            f"已点击{action}"
+        )
         time.sleep(0.4)
 
+    logger.error(f"ensure_at_bigmap: {attempts} 次尝试后仍未识别到大地图，放弃")
     return False
 
 
@@ -118,6 +215,7 @@ def open_city_task_panel(context: Context, max_steps: int = 12) -> bool:
     """
     last_state = ""
     repeated_state = 0
+    city_menu_swipes = 0
 
     def accept_state(state: str) -> bool:
         nonlocal last_state, repeated_state
@@ -134,6 +232,7 @@ def open_city_task_panel(context: Context, max_steps: int = 12) -> bool:
     for step in range(max_steps):
         img = _screencap(context)
         if img is None:
+            logger.error("进入任务板前置失败：连续截图失败，无法判断当前画面")
             return False
         if context.run_recognition("InTaskPannel", img).hit:
             logger.info(f"主城任务板已就绪 ({step + 1}/{max_steps})")
@@ -212,10 +311,11 @@ def open_city_task_panel(context: Context, max_steps: int = 12) -> bool:
             if not accept_state(state):
                 return False
             if not _task_succeeded(context.run_task("FindCityTask_OCR")):
+                logger.error("点击城市菜单里的任务入口没成功，交给上层重试")
                 return False
             continue
 
-        if context.run_recognition("SwitchInnerCity", img).hit:
+        if context.run_recognition("SwitchOuterCity", img).hit:
             state = "switch_inner"
             if not accept_state(state):
                 return False
@@ -228,6 +328,36 @@ def open_city_task_panel(context: Context, max_steps: int = 12) -> bool:
             if not accept_state(state):
                 return False
             if not _task_succeeded(context.run_task("EnterCity")):
+                logger.error("进入城市失败，交给上层重试")
+                return False
+            continue
+
+        # 城市外城/内城菜单是可滚动列表；任务入口可能位于当前视口下方。
+        # 只有先识别到城市页签，才允许使用项目已有的有界上滑节点，避免
+        # 在未知界面盲目滑动。每次动作后回到循环重新 OCR。
+        if context.run_recognition("SwitchInnerCity", img).hit:
+            if city_menu_swipes >= 3:
+                logger.error("城市菜单已滚动 3 次仍未找到任务入口")
+                return False
+            city_menu_swipes += 1
+            state = f"city_menu_scroll_{city_menu_swipes}"
+            if not accept_state(state):
+                return False
+            # FindCityTask_OCR 的 roi 只覆盖 y 406–1227，而「任务」是菜单第一行：
+            # 菜单被下滚过时它会跑到 roi 顶部之外（2026-09-26 23:52 实测：可见行
+            # 从「聊天」y≈453 开始，「任务」≈y293 已在框外）。旧代码只会往一个方向
+            # 滚（FindCityTask_SwipeDown 把下面的行拉上来），这时越滚越找不到。
+            # 改为两个方向轮流：奇数步先把上面的行拉回来，偶数步再往下找。
+            scroll_node = (
+                "FindCityTask_SwipeUp"
+                if city_menu_swipes % 2 == 1
+                else "FindCityTask_SwipeDown"
+            )
+            logger.info(
+                "城市菜单中暂未看到任务入口，滚动列表找任务入口 "
+                f"({city_menu_swipes}/3, {scroll_node})"
+            )
+            if not _task_succeeded(context.run_task(scroll_node)):
                 return False
             continue
 
@@ -380,15 +510,53 @@ def _preprocess_accept_task(context: Context) -> bool:
     logger.info("====== 接取任务 ======")
 
     if not ensure_at_bigmap(context):
+        # 旧版在这里静默返回 False，日志上只剩下「接取任务」一行，
+        # 排查月度未确认进度时无从下手；补上失败原因。
+        logger.error("接取任务前置失败：未能返回大地图")
         return False
 
     if ensure_task_accepted(context):
         return True
 
-    # 左右滑动会快速锁定当前任务城市的主城
-    # context.run_task("Map_MoveMainCityLeft")
-    # context.run_task("Map_MoveMainCityRight")
-    if not open_city_task_panel(context):
+    # 左右滑动会快速锁定当前任务城市的主城。
+    # 这是原项目用于避免城市入口靠近右侧商城按钮时误点的归中序列。
+    panel_opened = False
+    for panel_attempt in range(TASK_PANEL_OPEN_ATTEMPTS):
+        if panel_attempt == 0:
+            context.run_task("Map_MoveMainCityLeft")
+            context.run_task("Map_MoveMainCityRight")
+        else:
+            logger.warning(
+                f"第 {panel_attempt} 次未进入主城任务板，重新归中城市后重试 "
+                f"({panel_attempt}/{TASK_PANEL_OPEN_ATTEMPTS - 1})"
+            )
+            ensure_at_bigmap(context)
+            context.run_task("Map_MoveMainCityLeft")
+            context.run_task("Map_MoveMainCityRight")
+
+        if open_city_task_panel(context):
+            panel_opened = True
+            break
+
+        # 2026-09-26 21:58 实测：模态弹窗挡在城市界面上时，open_city_task_panel
+        # 的画面连续 3 次完全不变（日志：进入任务板状态连续无变化: open_city_list），
+        # 旧逻辑直接 return False → 第 2/240 个月重试上限 → 整条 240 月归零。
+        # 这里给最多 TASK_PANEL_EVENT_RESCUES 次「清掉遮挡事件再重试」的机会。
+        for attempt in range(TASK_PANEL_EVENT_RESCUES):
+            if not _handle_blocking_event(context):
+                break
+            logger.info(f"清掉遮挡事件后第 {attempt + 1} 次重试进入主城任务板")
+            if open_city_task_panel(context):
+                panel_opened = True
+                break
+        if panel_opened:
+            break
+
+    if not panel_opened:
+        logger.error(
+            f"接取任务前置失败：{TASK_PANEL_OPEN_ATTEMPTS} 次尝试（含清遮挡事件）"
+            "后仍未进入主城任务板"
+        )
         return False
     return _accept_new_task(context)
 
@@ -441,19 +609,40 @@ def _accept_new_task(context: Context) -> bool:
     if scan_current_pool():
         return True
 
-    # 整个列表只有黑名单、保护或非战斗任务时，使用页面提供的
-    # 10 水晶刷新一次，然后从顶部重新扫描。单次调用最多消耗一次，
-    # 年度层仍保留自己的两次月度上限，不会无界刷新。
-    logger.warning("HUD扫完整个任务池仍无候选，尝试水晶刷新一次")
-    refresh_result = context.run_task("FindCityTask_Refresh")
-    if not _task_succeeded(refresh_result):
-        logger.error("任务池刷新节点执行失败")
-        return False
-    if scan_current_pool():
+    # 不刷新任务池：FindCityTask_Refresh 会消耗水晶，年度流程禁止任何
+    # 钻石/水晶消耗。没有合适任务时改为「休息跳月」：返回大地图 → 点左上角
+    # 沙漏 → 弹窗点确定，让游戏时间继续推进（用户 2026-09-26 指定的方案）。
+    # 旧行为是直接返回 False，一个月接不到任务就把整条年度任务归零。
+    logger.warning("HUD扫完整个任务池仍无可接取任务，改走休息跳月")
+    if _rest_to_skip_month(context):
+        logger.info("休息跳月完成：已跳过一个月，游戏时间继续推进")
         return True
-
-    logger.error("刷新任务池后仍未检测到可接取的任务")
+    logger.warning("休息跳月未成功，按失败路径交给上层处理")
     return False
+
+
+# 本月是否已被「休息跳月」消耗掉。跳月本身就把游戏时间推进了一个月，
+# 所以随后必须跳过战斗阶段，不能再去任务板上找一个根本不存在的任务。
+# （上游 review 2026-10-06 指出：原先 _accept_new_task 空手返回 True，
+#   会让上层把「已跳月」当成「已接任务」，接着在无任务状态下找目标并失败。）
+_MONTH_SKIPPED_BY_REST = False
+
+
+def _rest_to_skip_month(context: Context) -> bool:
+    """没有可接任务时休息一个月：返回大地图 → 点沙漏 → 确定。
+
+    实测坐标（2026-09-26，720×1280 归一化空间）：
+    - 大地图左上角沙漏中心约 (77, 160)
+    - 弹窗文案「休息会导致士气下降，确定进入休息吗？/ 今日剩余时长(月)：97/240」
+    - 取消 [179,715,66,37]、确定 [481,714,68,37]
+    休息会消耗当月时长并降低士气，但能让游戏时间继续推进。
+    """
+    global _MONTH_SKIPPED_BY_REST
+    ok = _task_succeeded(context.run_task("SkipMonth_Rest"))
+    if ok:
+        # 跳月成功 = 本月已经过去了，标记一下让战斗阶段直接让路
+        _MONTH_SKIPPED_BY_REST = True
+    return ok
 
 
 def _process_fight(context: Context) -> bool:
@@ -466,6 +655,12 @@ def _process_fight(context: Context) -> bool:
     Returns:
         bool: 战斗成功返回 True，失败返回 False
     """
+    global _MONTH_SKIPPED_BY_REST
+    if _MONTH_SKIPPED_BY_REST:
+        _MONTH_SKIPPED_BY_REST = False
+        logger.info("本月已由「休息跳月」消耗，跳过战斗阶段直接进入下一个月")
+        return True
+
     logger.info("====== 战斗阶段 ======")
 
     if not _process_pre(context):
@@ -536,6 +731,36 @@ def _process_pre(context: Context) -> bool:
     return True
 
 
+# 战斗内「设置 → 撤退 → 确定」三个点（720x1280），与
+# auto_fight_processor.RETREAT_* 保持一致。撤退弹窗原文：
+# 「撤退人员不会受伤，不会消耗月份」——所以撤退是零代价的安全出口。
+BATTLE_RETREAT_POINTS = (
+    (49, 1237, "战斗设置"),
+    (360, 721, "撤退"),
+    (516, 731, "撤退确认"),
+)
+
+
+def _retreat_from_stuck_battle(context: Context) -> bool:
+    """战斗打不下去时主动撤退，让游戏真正离开战斗界面。
+
+    2026-10-03 实测：第 27/60 个月战斗里「结束回合」连点两次都没生效，
+    AutoFightProcessor 直接判失败，但**游戏仍停在战斗界面**；随后月度
+    重试全部退化成「无法到达目标城市: 翠庭」，两次就把整条 60 个月停掉。
+    撤退不受伤、不消耗月份，把「卡死在战斗里」变成「重试时是干净画面」。
+    """
+    for x, y, label in BATTLE_RETREAT_POINTS:
+        try:
+            job = context.tasker.controller.post_click(x, y)
+            job.wait()
+        except Exception as exc:  # noqa: BLE001 - 撤退失败交给上层恢复流程
+            logger.warning(f"撤退兜底：{label} 点击异常: {exc}")
+            return False
+        time.sleep(1.2)
+    logger.info("已从打不下去的战斗撤退（不受伤、不消耗月份），游戏应已回到大地图")
+    return True
+
+
 def _process_fighting(context: Context) -> bool:
     """从战斗准备页或已开始的战场接管，并运行主动战斗处理器。"""
     logger.info("====== 主动战斗 ======")
@@ -598,9 +823,15 @@ def _process_fighting(context: Context) -> bool:
         return False
     if not _task_succeeded(auto_result):
         logger.error("AutoFightProcessor 执行失败，且未出现胜负结算页")
+        # 这里最关键：不能让游戏留在战斗界面，否则月度重试全部变成
+        # 「无法到达目标城市」并把整条年度任务停掉（2026-10-03 实测）。
+        if _retreat_from_stuck_battle(context):
+            logger.warning("本次战斗按撤退收尾，交给月度重试从干净画面继续")
         return False
 
     logger.error("AutoFightProcessor 返回成功，但未识别到胜利结算页")
+    if _retreat_from_stuck_battle(context):
+        logger.warning("本次战斗按撤退收尾，交给月度重试从干净画面继续")
     return False
 
 
@@ -653,7 +884,7 @@ def _process_post(context: Context) -> bool:
 
     # 结束确认
     context.run_task("FightResult_ReturnBigMap")
-    if _wait_for_recognition(context, "UI_MainWindows", timeout=6.0):
+    if _wait_for_bigmap(context, timeout=6.0):
         logger.info("战后流程完成，已返回大地图")
         return True
 
@@ -675,7 +906,7 @@ def _recover_post_battle_to_bigmap(context: Context, max_steps: int = 8) -> bool
         img = _screencap(context)
         if img is None:
             return False
-        if context.run_recognition("UI_MainWindows", img).hit:
+        if _at_bigmap(context, img):
             return True
 
         event_name = detect_and_manage_event(context, img)
@@ -694,11 +925,27 @@ def _recover_post_battle_to_bigmap(context: Context, max_steps: int = 8) -> bool
     return ensure_at_bigmap(context, max_attempts=2)
 
 
+SCREENCAP_ATTEMPTS = 3
+
+
 def _screencap(context: Context) -> Optional[Any]:
-    job = context.tasker.controller.post_screencap().wait()
-    if not job.succeeded:
-        return None
-    return job.get()
+    """带重试的截图。
+
+    2026-09-26 23:51 实测：``open_city_task_panel`` 里单次 ``post_screencap``
+    失败（``img is None``——该分支原本一条日志都不打）会静默返回 False，
+    月度判定随之失败，两次重试同因后整条年度任务归零。截图失败是可重试的
+    瞬时故障，不该等于「流程失败」。
+    """
+    for attempt in range(SCREENCAP_ATTEMPTS):
+        job = context.tasker.controller.post_screencap().wait()
+        if job.succeeded:
+            img = job.get()
+            if img is not None:
+                return img
+        if attempt + 1 < SCREENCAP_ATTEMPTS:
+            time.sleep(0.3)
+    logger.warning(f"连续 {SCREENCAP_ATTEMPTS} 次截图失败，本步按未知画面处理")
+    return None
 
 
 def _detect_battle_state(context: Context, img: Any) -> str:

@@ -6,15 +6,16 @@
             "加入佣兵"
         ],
         "roi": [
-            194,
+            118,
             330,
-            403,
-            121
+            500,
+            460
         ],
         "timeout": 2000,
         "next": [
             "Event_MercenaryJoinCancel"
-        ]
+        ],
+        "focus": "佣兵加入类弹窗总入口。roi 从 [194,330,403,121] 扩到 [118,330,500,460]：2026-09-26 23:42 实测「XX的孩子成年了！可以加入佣兵团」的文案在 y=646，旧 roi 只到 y=451 → 本节点不命中 → Event_ChildGrowUp 的 next 链断在这里 → 一下都没点到 → 恢复 12 步耗尽、整条 240 月归零；现在同时覆盖「希望加入佣兵团」(y≈385) 与「孩子成年了…可以加入佣兵团」(y≈646) 两种弹窗文案"
     },
     "Event_MercenaryJoinCancel": {
         "recognition": "OCR",
@@ -27,11 +28,16 @@
         ],
         "action": "Click",
         "post_delay": 500,
-        "timeout": 2000
+        "timeout": 2000,
+        "focus": "弹窗关闭：改回点按（Click）。上游 2026-10-06 review 指出弹窗不需要长按；原先改成 300ms 长按是因为 2026-09-26 实测短按连点 12 次没关掉弹窗 —— 现改为 Click + max_hit 8 次重试，用重试次数代替按住的时长。",
+        "max_hit": 8
     },
     "Event_MercenaryJoinConfirm": {
         "recognition": "OCR",
-        "expected": "招募",
+        "expected": [
+            "招募",
+            "招莫"
+        ],
         "roi": [
             118,
             786,
@@ -40,7 +46,9 @@
         ],
         "action": "Click",
         "post_delay": 500,
-        "timeout": 2000
+        "timeout": 2000,
+        "focus": "弹窗关闭：改回点按（Click）。上游 2026-10-06 review 指出弹窗不需要长按；原先改成 300ms 长按是因为 2026-09-26 实测短按连点 12 次没关掉弹窗 —— 现改为 Click + max_hit 8 次重试，用重试次数代替按住的时长。",
+        "max_hit": 8
     },
     "Event_MercenaryBaby": {
         "recognition": "OCR",
@@ -246,6 +254,47 @@
         ],
         "post_delay": 500,
         "timeout": 2000
+    },
+    "AnnualSettlement": {
+        "focus": "年终结算弹窗（收入页/支出页…多页）会盖住整个大地图，且不只在丰收节里出现；不是丰收节上下文时没人认它，会一路走到「年度流程处于未知画面」把整轮停掉（2026-10-02 第 36/60 个月实测）。本节点只负责认出它，翻页交给 _Confirm。",
+        "recognition": "OCR",
+        "expected": [
+            "年度结算",
+            "占堡产出"
+        ],
+        "roi": [
+            30,
+            55,
+            660,
+            900
+        ],
+        "action": "DoNothing",
+        "timeout": 2000,
+        "next": [
+            "AnnualSettlement_Confirm",
+            "AnnualSettlement"
+        ]
+    },
+    "AnnualSettlement_Confirm": {
+        "focus": "点结算弹窗上的「确定」。按钮在不同页高度不一样（收入页 y≈1042、支出页 y≈920），所以不写死 target，直接点 OCR 到的那个「确定」框。",
+        "recognition": "OCR",
+        "expected": [
+            "确定"
+        ],
+        "roi": [
+            200,
+            860,
+            320,
+            300
+        ],
+        "action": "Click",
+        "max_hit": 6,
+        "post_delay": 900,
+        "timeout": 2000,
+        "next": [
+            "AnnualSettlement",
+            "AnnualSettlement_Confirm"
+        ]
     },
     "Event_HarvestFestivalDealWith": {
         "next": [
@@ -492,6 +541,7 @@
         "action": "Click",
         "post_delay": 500,
         "timeout": 2000,
+        "max_hit": 3,
         "focus": "不好, 佣兵退休啦！！！！",
         "next": [
             "Event_MercenarieRetire_Agree"
@@ -511,6 +561,7 @@
         "action": "Click",
         "post_delay": 500,
         "timeout": 2000,
+        "max_hit": 4,
         "next": [
             "Event_MercenarieRetire_Finish",
             "[JumpBack]ClickCenter_500ms"
@@ -530,6 +581,7 @@
         "action": "Click",
         "post_delay": 500,
         "timeout": 2000,
+        "max_hit": 3,
         "next": [
             "Event_MercenarieRetire_Finish_Confirm"
         ]
@@ -540,14 +592,16 @@
             "确定"
         ],
         "roi": [
-            221,
-            534,
-            271,
-            559
+            200,
+            520,
+            420,
+            600
         ],
         "action": "Click",
         "post_delay": 500,
-        "timeout": 2000
+        "timeout": 2000,
+        "max_hit": 3,
+        "focus": "退休收尾：确认弹窗的「确定」。原 roi [221,534,271,559] 右边界 492 把「确定」按钮（实测 [481,714,68,37]）切在框外，识别不到 → 落到 [JumpBack]ClickCenter_500ms 死循环（2026-09-26 21:35 实测卡死 17 分钟）"
     },
     "Event_PirateRaid": {
         "recognition": "OCR",
@@ -628,6 +682,120 @@
         ],
         "max_hit": 6,
         "timeout": 2000
+    },
+    "MapTabContinent": {
+        "recognition": "OCR",
+        "expected": [
+            "加尔提兰"
+        ],
+        "roi": [
+            290,
+            1225,
+            140,
+            55
+        ],
+        "timeout": 2000,
+        "next": [],
+        "focus": "成功闸门：底栏中间那格显示「加尔提兰」= 已在大陆。底栏是大字体，OCR 稳定（实测 0.99+），比浮窗里的小字可靠得多"
+    },
+    "MapTabArchipelago": {
+        "recognition": "OCR",
+        "expected": [
+            "瑞格群岛"
+        ],
+        "roi": [
+            290,
+            1225,
+            140,
+            55
+        ],
+        "timeout": 2000,
+        "next": []
+    },
+    "Event_PirateRaid_PickArchipelago": {
+        "recognition": "OCR",
+        "roi": [
+            200,
+            1015,
+            350,
+            130
+        ],
+        "action": "Click",
+        "post_delay": 1200,
+        "timeout": 2000,
+        "focus": "浮窗里选「瑞格群岛」：纯 OCR 识别（不写 target）。注意浮窗里是区域名「瑞格群岛」，不是岛名「帕格维斯」 ｜ 终点节点必须显式写 next: []（否则 maa 会回到父节点的 next 列表继续跑，把兜底节点重复执行）",
+        "expected": [
+            "瑞格群岛"
+        ],
+        "next": [
+            "MapTabArchipelago"
+        ]
+    },
+    "Event_PirateRaid_RegionSwitch": {
+        "recognition": "DirectHit",
+        "target": [
+            300,
+            1230,
+            120,
+            50
+        ],
+        "action": "Click",
+        "post_delay": 800,
+        "timeout": 2000,
+        "next": [
+            "Event_PirateRaid_PickArchipelago"
+        ]
+    },
+    "Event_PirateRaid_GoArchipelago": {
+        "recognition": "DirectHit",
+        "next": [
+            "Event_PirateRaid_PickArchipelago",
+            "Event_PirateRaid_RegionSwitch"
+        ],
+        "timeout": 3000
+    },
+    "Event_PirateRaid_PickContinent": {
+        "recognition": "OCR",
+        "roi": [
+            200,
+            1015,
+            350,
+            130
+        ],
+        "action": "Click",
+        "post_delay": 1200,
+        "timeout": 2000,
+        "focus": "浮窗里选「加尔提兰」：纯 OCR 识别（不写 target，点在识别到的文字框上）。浮窗显示的是区域名 ｜ 终点节点必须显式写 next: []（否则 maa 会回到父节点的 next 列表继续跑，把兜底节点重复执行）",
+        "expected": [
+            "加尔提兰"
+        ],
+        "next": [
+            "MapTabContinent"
+        ]
+    },
+    "Event_PirateRaid_RegionSwitchContinent": {
+        "recognition": "DirectHit",
+        "target": [
+            300,
+            1230,
+            120,
+            50
+        ],
+        "action": "Click",
+        "post_delay": 1600,
+        "timeout": 2000,
+        "next": [
+            "Event_PirateRaid_PickContinent"
+        ],
+        "focus": "点底栏中间区域格开浮窗（只在 PickContinent 确认浮窗没开时才会走到这里）。post_delay 1600ms 等浮窗弹出动画"
+    },
+    "Event_PirateRaid_GoContinent": {
+        "recognition": "DirectHit",
+        "next": [
+            "Event_PirateRaid_PickContinent",
+            "Event_PirateRaid_RegionSwitchContinent"
+        ],
+        "timeout": 3000
     },
     "Event_PirateRaid_SailingConfirm": {
         "recognition": "OCR",
@@ -794,5 +962,71 @@
         "action": "Click",
         "post_delay": 500,
         "timeout": 2000
+    },
+    "Event_GrainConvert": {
+        "recognition": "OCR",
+        "expected": [
+            "粮食转换"
+        ],
+        "roi": [
+            200,
+            250,
+            320,
+            100
+        ],
+        "timeout": 2000,
+        "next": [
+            "Event_GrainConvertConfirm"
+        ]
+    },
+    "Event_GrainConvertConfirm": {
+        "recognition": "OCR",
+        "expected": [
+            "确定"
+        ],
+        "roi": [
+            240,
+            985,
+            240,
+            120
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000
+    },
+    "Event_ChildGrowUp": {
+        "recognition": "OCR",
+        "expected": [
+            "孩子成年了",
+            "可以加入佣兵团"
+        ],
+        "roi": [
+            100,
+            625,
+            520,
+            70
+        ],
+        "timeout": 2000,
+        "focus": "孩子成年/佣兵申请：交给 Event_MercenaryJoin 链，由界面开关「开启自动接受佣兵」决定点招募还是取消",
+        "next": [
+            "Event_MercenaryJoin"
+        ]
+    },
+    "Event_ChildGrowUp_Cancel": {
+        "recognition": "OCR",
+        "expected": [
+            "取消"
+        ],
+        "roi": [
+            150,
+            825,
+            160,
+            90
+        ],
+        "action": "Click",
+        "post_delay": 500,
+        "timeout": 2000,
+        "max_hit": 3,
+        "focus": "成年弹窗选「取消」：仅在界面开关「开启自动接受佣兵」= 否 时才会用到（默认链走 Event_MercenaryJoin）"
     }
 }

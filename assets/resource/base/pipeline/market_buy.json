@@ -1,0 +1,350 @@
+{
+  "MarketEnter": {
+    "focus": "【采购第1步】大地图 → 进市场货架（一次进场，后面所有物品都复用，不再来回跑）",
+    "timeout": 60000,
+    "next": [
+      "MarketBread_OpenCastle"
+    ]
+  },
+  "MarketBread_OpenCastle": {
+    "focus": "大地图 → 打开城堡（底栏页签是暗色的，OCR 认不出「城堡」二字，改用图标模板匹配）",
+    "recognition": "TemplateMatch",
+    "template": "UI/CastleTab.png",
+    "roi": [
+      400,
+      1150,
+      200,
+      130
+    ],
+    "threshold": 0.6,
+    "action": "Click",
+    "post_delay": 3000,
+    "timeout": 3000,
+    "next": [
+      "MarketBread_OpenMarket"
+    ]
+  },
+  "MarketBread_OpenMarket": {
+    "focus": "城堡界面 → 打开市场",
+    "recognition": "OCR",
+    "roi": [
+      320,
+      620,
+      160,
+      70
+    ],
+    "expected": [
+      "市场"
+    ],
+    "action": "Click",
+    "post_delay": 1500,
+    "timeout": 3000,
+    "next": [
+      "MarketBread_BuyEntry"
+    ]
+  },
+  "MarketBread_BuyEntry": {
+    "focus": "市场子菜单 → 点「购买」进入货架",
+    "recognition": "OCR",
+    "roi": [
+      220,
+      500,
+      280,
+      70
+    ],
+    "expected": [
+      "购买"
+    ],
+    "action": "Click",
+    "post_delay": 1500,
+    "timeout": 3000,
+    "next": [
+      "MarketShelfReady"
+    ]
+  },
+  "MarketShelfReady": {
+    "focus": "已经站在货架上（进场结束的落脚点）",
+    "recognition": "OCR",
+    "roi": [
+      40,
+      370,
+      400,
+      840
+    ],
+    "expected": [
+      "物品"
+    ],
+    "action": "DoNothing",
+    "post_delay": 300,
+    "timeout": 3000,
+    "next": []
+  },
+  "MarketPickOne": {
+    "focus": "【采购第2步】在货架上找「一件」物品并买下（先在当前屏找，找不到就 ScrollFind 往下翻；物品名由调用方 override 到 MarketBread_PickBread.expected）",
+    "timeout": 60000,
+    "next": [
+      "MarketBread_PickBread",
+      "MarketBread_ScrollFind"
+    ]
+  },
+  "MarketBread_PickBread": {
+    "focus": "货架列表 → 选中目标物品（roi 含中间「（剩余 N）」列，便于日志判断有没有货）",
+    "recognition": "OCR",
+    "roi": [
+      40,
+      370,
+      400,
+      840
+    ],
+    "expected": [
+      "硫磺"
+    ],
+    "action": "Click",
+    "post_delay": 1200,
+    "timeout": 3000,
+    "next": [
+      "MarketBread_BuyOpen",
+      "MarketBread_ScrollFind",
+      "MarketPickNone"
+    ]
+  },
+  "MarketBread_ScrollFind": {
+    "focus": "列表里没看到目标物品 → 小步慢拖向下翻找（最多 20 次）",
+    "max_hit": 20,
+    "recognition": "DirectHit",
+    "action": "Swipe",
+    "begin": [
+      360,
+      1000
+    ],
+    "end": [
+      360,
+      600
+    ],
+    "duration": 1500,
+    "post_delay": 1500,
+    "timeout": 3000,
+    "next": [
+      "MarketBread_PickBread",
+      "MarketBread_ScrollFind"
+    ]
+  },
+  "MarketBread_BuyOpen": {
+    "focus": "点右下「购买」打开数量弹窗",
+    "recognition": "OCR",
+    "roi": [
+      500,
+      1180,
+      220,
+      90
+    ],
+    "expected": [
+      "购买"
+    ],
+    "action": "Click",
+    "post_delay": 1200,
+    "timeout": 3000,
+    "next": [
+      "MarketBread_MaxQty",
+      "MarketPickNone"
+    ]
+  },
+  "MarketBread_MaxQty": {
+    "focus": "弹窗内把数量拉满（全部购买）",
+    "recognition": "OCR",
+    "roi": [
+      150,
+      765,
+      130,
+      60
+    ],
+    "expected": [
+      "数量"
+    ],
+    "target": [
+      519,
+      787,
+      28,
+      30
+    ],
+    "action": "Click",
+    "post_delay": 800,
+    "timeout": 3000,
+    "next": [
+      "MarketBread_Confirm"
+    ]
+  },
+  "MarketBread_MaxQtyB": {
+    "focus": "阶梯长按第2档（默认按住 800ms ≈ +26）：次数与时长由调用方 override",
+    "recognition": "OCR",
+    "roi": [
+      150,
+      765,
+      130,
+      60
+    ],
+    "expected": [
+      "数量"
+    ],
+    "target": [
+      441,
+      786,
+      28,
+      28
+    ],
+    "action": "LongPress",
+    "duration": 800,
+    "max_hit": 1,
+    "post_delay": 400,
+    "timeout": 3000,
+    "next": [
+      "MarketBread_MaxQtyB",
+      "MarketBread_MaxQtyC"
+    ]
+  },
+  "MarketBread_MaxQtyC": {
+    "focus": "阶梯长按第3档（默认按住 450ms ≈ +7）：次数与时长由调用方 override",
+    "recognition": "OCR",
+    "roi": [
+      150,
+      765,
+      130,
+      60
+    ],
+    "expected": [
+      "数量"
+    ],
+    "target": [
+      441,
+      786,
+      28,
+      28
+    ],
+    "action": "LongPress",
+    "duration": 450,
+    "max_hit": 1,
+    "post_delay": 300,
+    "timeout": 3000,
+    "next": [
+      "MarketBread_MaxQtyC",
+      "MarketBread_MaxQtyTopUp"
+    ]
+  },
+  "MarketBread_MaxQtyTopUp": {
+    "focus": "长按＋冲到位后，用单击「＋」补齐零头（数量由调用方 override 到 max_hit）",
+    "recognition": "OCR",
+    "roi": [
+      150,
+      765,
+      130,
+      60
+    ],
+    "expected": [
+      "数量"
+    ],
+    "target": [
+      441,
+      786,
+      28,
+      28
+    ],
+    "action": "Click",
+    "max_hit": 1,
+    "post_delay": 220,
+    "timeout": 3000,
+    "next": [
+      "MarketBread_MaxQtyTopUp",
+      "MarketBread_Confirm"
+    ]
+  },
+  "MarketBread_Confirm": {
+    "focus": "确认购买（买完会弹「获得 xx 」横幅盖住货架，多等一会儿让它自己消失）",
+    "recognition": "OCR",
+    "roi": [
+      420,
+      875,
+      200,
+      95
+    ],
+    "expected": [
+      "确定"
+    ],
+    "action": "Click",
+    "post_delay": 2600,
+    "timeout": 3000,
+    "next": [
+      "MarketPickDone"
+    ]
+  },
+  "MarketPickDone": {
+    "focus": "这一件买完了：点货架空白处清掉「获得 xx」横幅，留在货架上等下一件",
+    "recognition": "DirectHit",
+    "action": "Click",
+    "target": [
+      170,
+      620,
+      80,
+      60
+    ],
+    "post_delay": 700,
+    "timeout": 3000,
+    "next": []
+  },
+  "MarketPickNone": {
+    "focus": "这一件没找到 / 已售罄（点购买没弹数量窗）→ 停手，留在货架上，不要退出市场",
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "post_delay": 300,
+    "timeout": 3000,
+    "next": []
+  },
+  "MarketLeave": {
+    "focus": "【采购第3步】买完所有物品 → 返回大地图",
+    "timeout": 60000,
+    "next": [
+      "MarketBread_Exit"
+    ]
+  },
+  "MarketBread_Exit": {
+    "focus": "返回大地图（连点返回箭头，直到看到大地图底部导航）",
+    "recognition": "DirectHit",
+    "target": [
+      652,
+      8,
+      56,
+      50
+    ],
+    "action": "Click",
+    "max_hit": 4,
+    "post_delay": 1200,
+    "timeout": 3000,
+    "next": [
+      "MarketBread_OnBigMap",
+      "MarketBread_Exit"
+    ]
+  },
+  "MarketBread_OnBigMap": {
+    "focus": "确认已回到大地图（终止条件）",
+    "recognition": "OCR",
+    "roi": [
+      545,
+      1225,
+      160,
+      60
+    ],
+    "expected": [
+      "佣兵团"
+    ],
+    "action": "DoNothing",
+    "post_delay": 300,
+    "timeout": 3000,
+    "next": []
+  },
+  "MarketBuyBread": {
+    "focus": "单件旧入口（进场→找一件面包→买）：保留给手动调试，正式流程改用 MarketEnter / MarketPickOne / MarketLeave",
+    "timeout": 3000,
+    "next": [
+      "MarketBread_OpenCastle"
+    ]
+  }
+}
