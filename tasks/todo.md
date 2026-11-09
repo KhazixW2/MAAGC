@@ -453,6 +453,50 @@ err:第 7/12 个月达到重试上限，停止年度任务
 
 `tests/test_auto_fight_world_scan.py` / `tests/test_progress_logging.py` 里
 针对已迁走的实例方法做 monkeypatch 的地方，改为 patch 新的模块级函数
-（`action.zshg.battle_vision.*` / `action.zshg.battle_geometry.*`）与
-`action.zshg.battle_camera.screencap`、`action.zshg.battle_action.progress`。
+（`action.fight.battle_vision.*` / `action.fight.battle_geometry.*`）与
+`action.fight.battle_camera.screencap`、`action.fight.battle_action.progress`。
 断言的行为本身未变。
+
+---
+
+## 战斗模块迁到 `action/fight/`（`zshg` 只保留角色/联姻/日常）
+
+战斗相关代码原先散在 `action/zshg/`，但它们服务的是 `fight_utils.json`
+的 AutoFight 流程，与 `action/fight/` 的战斗调度器属于同一子系统。
+统一到 `action/fight/` 后，目录职责按「子系统」而不是按「游戏区域」划分。
+
+### 迁移清单（11 个文件）
+
+`auto_fight_processor.py` 与 10 个 `battle_*.py`
+（`battle_action` / `battle_camera` / `battle_decision` / `battle_geometry` /
+`battle_grid` / `battle_planner` / `battle_support` / `battle_threat` /
+`battle_vision` / `battle_world_map`）。
+
+`action/zshg/` 保留 `child.py`、`daily_task.py`、`marry.py`、
+`matchMarryProcessor.py`、`role_utils.py`、`task_hud_recognizer.py`。
+
+### 同步修改
+
+| 位置 | 改动 |
+| --- | --- |
+| `agent/action/fight/fight_utils.py` | `from action.zshg.battle_world_map import ...` → `from .battle_world_map import ...`（同包内相对导入） |
+| `agent/agent_allfile.py` | `import action.zshg.auto_fight_processor` → `import action.fight.auto_fight_processor` |
+| `tests/test_auto_fight_world_scan.py`、`tests/test_progress_logging.py`、`tests/test_battle_world_map.py` | 导入与 patch 路径 `action.zshg.*` → `action.fight.*` |
+| `docs/zh_cn/developers/custom.md`、`docs/zh_cn/graph/battle_flow_analysis_2026-07-31.md`、`docs/zh_cn/自动推年与战斗系统分析.md` | 路径与行号引用改为新位置 |
+
+### 依赖环检查
+
+迁移前 `action/zshg/` **不** 引用 `action/fight/`，只有反向依赖
+（`fight_utils.py` → `action.zshg.battle_world_map`）。把
+`battle_world_map.py` 一并迁到 `fight/` 后改为同包相对导入，
+`task_hud_recognizer.py` 仍留在 `zshg` 供 `fight_processor.py` / `fight_utils.py`
+使用 —— 两个方向都不存在环。
+
+### 迁移后的验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| `python -m unittest discover -s tests` | ✓ 64 tests OK |
+| `python -m py_compile` 全部 agent / tests 文件 | ✓ COMPILE OK |
+| 全仓库残留 `zshg.*battle_*` / `zshg.auto_fight` 引用扫描 | ✓ 0 处 |
+| `install-cli` 重新打包 + 自定义动作注册冒烟测试 | ✓ `AutoFightProcessor` 注册成功 |

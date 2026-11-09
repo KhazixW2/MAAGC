@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
 
-from action.zshg import battle_action
-from action.zshg.auto_fight_processor import AutoFightProcessor
-from action.zshg.battle_world_map import BattleSessionState
+from action.fight import battle_action
+from action.fight.auto_fight_processor import AutoFightProcessor
+from action.fight.battle_world_map import BattleSessionState
 from action.fight import fight_processor as fp
 from action.fight import fight_utils as fu
 from utils import logger

@@ -1,6 +1,6 @@
 import unittest
 
-from agent.action.zshg.battle_world_map import (
+from agent.action.fight.battle_world_map import (
     ENEMY,
     SELF,
     BattleSessionRegistry,

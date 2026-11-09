@@ -10,11 +10,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
 
-from action.zshg import battle_vision
-from action.zshg.auto_fight_processor import AutoFightProcessor
-from action.zshg.battle_geometry import is_adjacent_cell
-from action.zshg.battle_grid import BattleGrid, Cell, CellType
-from action.zshg.battle_world_map import BattleSessionState
+from action.fight import battle_vision
+from action.fight.auto_fight_processor import AutoFightProcessor
+from action.fight.battle_geometry import is_adjacent_cell
+from action.fight.battle_grid import BattleGrid, Cell, CellType
+from action.fight.battle_world_map import BattleSessionState
 
 
 class RecordingScanner:
@@ -72,15 +72,15 @@ class WorldViewScanTests(unittest.TestCase):
 
         with (
             patch(
-                "action.zshg.battle_camera.screencap",
+                "action.fight.battle_camera.screencap",
                 side_effect=lambda _context: next(frames),
             ),
             patch(
-                "action.zshg.battle_vision.camera_motion",
+                "action.fight.battle_vision.camera_motion",
                 return_value=(-120.0, 0.0, 1.0),
             ),
             patch(
-                "action.zshg.battle_vision.camera_shift_is_real",
+                "action.fight.battle_vision.camera_shift_is_real",
                 return_value=True,
             ),
         ):
@@ -118,11 +118,11 @@ class ThreatCellTests(unittest.TestCase):
 
         with (
             patch(
-                "action.zshg.battle_vision.threat_enemy_cell_from_mask",
+                "action.fight.battle_vision.threat_enemy_cell_from_mask",
                 return_value=None,
             ),
             patch(
-                "action.zshg.battle_vision.threat_origin_from_mask",
+                "action.fight.battle_vision.threat_origin_from_mask",
                 return_value=(600, 180, 0.8),
             ),
         ):
@@ -142,7 +142,7 @@ class ThreatCellTests(unittest.TestCase):
         context = SimpleNamespace(run_recognition=lambda *_: None)
 
         with patch(
-            "action.zshg.battle_vision.threat_enemy_cell_from_mask",
+            "action.fight.battle_vision.threat_enemy_cell_from_mask",
             return_value=(2, 3, 1.2),
         ):
             points = processor._merge_open_threat_overlay(
@@ -226,7 +226,7 @@ class FocusKnownAllyTests(unittest.TestCase):
         )
 
         with patch(
-            "action.zshg.battle_camera.screencap", return_value=image
+            "action.fight.battle_camera.screencap", return_value=image
         ):
             focused = processor._focus_known_ally(object(), round_seen=4)
 
@@ -361,7 +361,7 @@ class ActionKindTests(unittest.TestCase):
         )
         cell = Cell(2, 3, move_center=(300, 400), attack_center=(310, 410))
 
-        with patch("action.zshg.battle_action.time.sleep"):
+        with patch("action.fight.battle_action.time.sleep"):
             processor._click_cell(object(), cell, "移动")
             processor._click_cell(object(), cell, "威胁中心攻击")
 

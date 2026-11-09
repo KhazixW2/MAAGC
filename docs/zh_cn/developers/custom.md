@@ -23,7 +23,7 @@ class XxxProcessor(CustomAction):
 |-----------|----------|-----------|----------------|
 | `TaskProcessor` | [`agent/action/fight/fight_processor.py:298`](../../../agent/action/fight/fight_processor.py) | 单月任务调度：回大地图 → 处理本月节日 → `fight_utils.start_task` | `auto_task.json:30` |
 | `YearlyTaskProcessor` | [`agent/action/fight/fight_processor.py:315`](../../../agent/action/fight/fight_processor.py) | 推年总入口：读 `CustomTaskBlacklist` → 加黑名单 → 循环推月份 | `auto_task.json:37` |
-| `AutoFightProcessor` | [`agent/action/zshg/auto_fight_processor.py:71`](../../../agent/action/zshg/auto_fight_processor.py) | 战斗主循环：扫 BattleGrid、检测/行动阶段、识别格子状态、执行攻击。能力按职责拆到 `battle_camera.py`（镜头）、`battle_threat.py`（威胁层）、`battle_planner.py`（地图合并）、`battle_decision.py`（单角色决策）、`battle_action.py`（点击与校验）、`battle_vision.py` / `battle_geometry.py`（纯函数） | `fight_utils.json:75` |
+| `AutoFightProcessor` | [`agent/action/fight/auto_fight_processor.py:71`](../../../agent/action/fight/auto_fight_processor.py) | 战斗主循环：扫 BattleGrid、检测/行动阶段、识别格子状态、执行攻击。能力按职责拆到 `battle_camera.py`（镜头）、`battle_threat.py`（威胁层）、`battle_planner.py`（地图合并）、`battle_decision.py`（单角色决策）、`battle_action.py`（点击与校验）、`battle_vision.py` / `battle_geometry.py`（纯函数） | `fight_utils.json:75` |
 | `ChildRec` | [`agent/action/zshg/child.py:326`](../../../agent/action/zshg/child.py) | 识别子项：父母姓名/爵位/佣兵团、六维属性、血脉、特性；可选好苗子提醒 | `child_info.json:283` |
 | `DailyTaskProcessor` | [`agent/action/zshg/daily_task.py:11`](../../../agent/action/zshg/daily_task.py) | 每日任务调度：遍历 `BigMapMarket` / `BigMapMall` / `BigMapRewardToken` 按 `enabled` 标志执行 | `event_utils.json` 多处 |
 | `MarryProcessor` | [`agent/action/zshg/marry.py:33`](../../../agent/action/zshg/marry.py) | 联姻/相亲主流程：进大厅、识别血统、姓名库匹配、自动确认或换下一个 | `marry.json` 多处 |

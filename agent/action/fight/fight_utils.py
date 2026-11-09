@@ -7,8 +7,9 @@ from typing import Any, Optional, Set
 
 from utils import logger, progress
 from utils.screen import screencap
-from action.zshg.battle_world_map import BattleSessionRegistry, session_key
 from action.zshg.task_hud_recognizer import TaskHudRecognizer
+
+from .battle_world_map import BattleSessionRegistry, session_key
 
 # 地图分层信号：底部出现「前往大陆」= 人在群岛层；出现「前往群岛」或
 # 主城可见 = 人在大陆层。fight_processor 与 pirate_raid_processor 共用，
