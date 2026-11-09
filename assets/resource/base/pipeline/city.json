@@ -455,7 +455,9 @@
     },
     "FightFail": {
         "recognition": "OCR",
-        "expected": "失败",
+        "expected": [
+            "战斗失败"
+        ],
         "roi": [
             147,
             9,

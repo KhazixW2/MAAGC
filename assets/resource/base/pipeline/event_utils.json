@@ -450,10 +450,10 @@
     "Event_ConfessionFail": {
         "recognition": "OCR",
         "roi": [
-            195,
-            176,
-            351,
-            164
+            112,
+            163,
+            441,
+            180
         ],
         "expected": [
             "表白失败"

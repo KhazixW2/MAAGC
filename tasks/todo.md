@@ -500,3 +500,53 @@ err:第 7/12 个月达到重试上限，停止年度任务
 | `python -m py_compile` 全部 agent / tests 文件 | ✓ COMPILE OK |
 | 全仓库残留 `zshg.*battle_*` / `zshg.auto_fight` 引用扫描 | ✓ 0 处 |
 | `install-cli` 重新打包 + 自定义动作注册冒烟测试 | ✓ `AutoFightProcessor` 注册成功 |
+
+## 修复：战后随机事件（表白失败）卡死年度任务
+
+### 现象
+
+第 3/12 月战斗胜利后卡住，控制台只剩：
+
+```
+进度: 第 3/12 月 · 雄月城 · 战后处理
+warn:战后奖励流程结束后未直接识别到大地图，尝试处理战后中断事件
+err:战后流程未能回到大地图
+warn:第 3/12 个月未确认进度 (1/2)
+err:恢复时识别到战斗失败结算页，不自动重开战斗
+err:第 3/12 个月恢复失败，停止年度任务
+```
+
+屏幕停在「感a力b科虎佩公向肖恩表白失败！」的随机事件信纸弹窗上。
+
+### 根因
+
+| # | 问题 | 证据 | 修复 |
+| --- | --- | --- | --- |
+| 1 | `FightFail` 用**全屏 OCR 找裸的「失败」**，把「表白失败」横幅当成战斗失败结算页 | `maafw.log` 01:00:17.680：`FightFail` best_result = `感a力b科虎佩公向肖恩表白失败！`(0.983) → Succeeded | expected 改成完整短语 `战斗失败` |
+| 2 | `Event_ConfessionFail` 的 ROI 截断横幅首字，OCR 整行读错 | 同一行文字在 `Event_ConfessionSuccess` 的 ROI 下读成 `感a力b科虎佩公向肖恩表白失败！`(0.979)，在 `Event_ConfessionFail` 的 ROI 下读成 `力b科度佩公向省恩表自失收！`(0.728) | ROI 改成 `[112,163,441,180]`（与 `Event_ConfessionSuccess` 一致） |
+| 3 | 该事件节点从来没生效过 | 5 个日志文件里 `Event_ConfessionFail` 识别 174 次、命中 **0** 次（ROI 是 2026-03-15 `7a08bda` 加的） | 同上 |
+| 4 | 「战后中断事件」分支点屏幕中心，对模态信纸无效 | `BackButton_500ms` 模板 0.288（阈值 0.7）不命中 → 退到点 (360,640) 信纸正文 → 8 轮空转 21 秒 | 删除该分支 |
+
+### 改动
+
+| 位置 | 改动 |
+| --- | --- |
+| `agent/action/fight/fight_utils.py` | 删除 `_recover_post_battle_to_bigmap`；`ensure_at_bigmap` 增加「关掉挡住大地图的随机事件」；`_process_post` 改用 `ensure_at_bigmap` 兜底 |
+| `assets/resource/base/pipeline/city.json` | `FightFail` expected `失败` → `战斗失败` |
+| `assets/resource/base/pipeline/event_utils.json` | `Event_ConfessionFail` ROI → `[112,163,441,180]` |
+| `tests/test_bigmap_event_recovery.py` | 新增 7 个回归用例 |
+| `docs/zh_cn/自动推年与战斗系统分析.md`、`docs/zh_cn/graph/battle_flow_analysis_2026-07-31.md` | 同步流程说明 |
+
+事件识别仍然只有 `detect_and_manage_event` 一处：战前 `preprocess_events` 走它，
+回大地图的 `ensure_at_bigmap` 也走它，不再有「战后中断事件」的第二条路径。
+MaaFW 侧只在 `ensure_at_bigmap` 走到「不在大地图」分支时才做事件识别，
+正常路径没有额外开销。
+
+### 验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| `python -m unittest discover -s tests` | ✓ 71 tests OK（新增 7 个） |
+| 新增用例在 HEAD 上必须失败 | ✓ `FightFail` 会匹配表白横幅、`Event_ConfessionFail` ROI 包不住横幅，两条断言均失败 |
+| `python check_resource.py assets/resource/base` | ✓ All directories checked |
+| `install-cli` 重新打包 + 自定义动作注册冒烟测试 | ✓ `AutoFightProcessor` 注册成功 |

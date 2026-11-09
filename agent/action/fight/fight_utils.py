@@ -25,6 +25,10 @@ ITEM_GAIN_BANNER_DISMISS_NODE = "BigMapDismissItemGainBanner"
 # 横幅在随机事件流程里的事件名：它和随机事件一样属于打断流程的浮层。
 ITEM_GAIN_BANNER_EVENT = "item_gain_banner"
 
+# 同一个随机事件最多连续处理这么多次；再往后仍然是它，就不再重复触发
+# （有些事件会直接开战），改用通用的返回/点击中心兜底。
+MAX_EVENT_DISMISS_REPEATS = 2
+
 
 @dataclass
 class YearlyProgress:
@@ -179,6 +183,10 @@ def ensure_at_bigmap(
     """
     检测当前是否在大地图界面，不在的话尝试返回大地图
 
+    随机事件（例如「表白失败」的信纸弹窗）是模态窗口，会把大地图压暗，
+    点城市、滑动地图全部落空。事件识别只有 detect_and_manage_event
+    一处，这里复用它把弹窗关掉再继续回大地图，不再另开战后事件分支。
+
     Args:
         context: MAA 上下文对象
         auto_return: 是否自动尝试返回大地图，默认True
@@ -187,6 +195,9 @@ def ensure_at_bigmap(
         bool: 成功在大地图返回True，否则返回False
     """
     attempts = max(1, max_attempts if auto_return else 1)
+    last_event = None
+    repeated_event_count = 0
+    event_handling_allowed = True
     for _ in range(attempts):
         img = screencap(context)
         if img is None:
@@ -196,12 +207,41 @@ def ensure_at_bigmap(
         if not auto_return:
             return False
 
+        event_name = (
+            _dismiss_pending_event(context, img) if event_handling_allowed else None
+        )
+        if event_name:
+            if event_name == last_event:
+                repeated_event_count += 1
+            else:
+                last_event = event_name
+                repeated_event_count = 1
+            if repeated_event_count <= MAX_EVENT_DISMISS_REPEATS:
+                continue
+            # 同一个事件反复出现说明这次处理没有生效，不再重复触发它
+            # （某些事件会直接开战），改用通用的返回/点击中心兜底。
+            event_handling_allowed = False
+            logger.warning(f"随机事件 {event_name} 连续处理无变化，改用通用回退")
+
         # UI_ReturnBigMap 内含 JumpBack 循环，遇到未知弹窗时会无界等待。
         # 这里只执行可证明、有上限的单步恢复。
         _back_or_click_center(context, img)
         time.sleep(0.4)
 
     return False
+
+
+def _dismiss_pending_event(context: Context, img: Any) -> Optional[str]:
+    """关掉挡住大地图的随机事件弹窗，返回事件名；没有事件时返回 None。"""
+    # 局部导入避免 fight_processor -> fight_utils 的模块加载环。
+    from action.fight.fight_processor import detect_and_manage_event
+
+    event_name = detect_and_manage_event(context, img)
+    if not event_name:
+        return None
+    logger.debug(f"随机事件已处理: {event_name}")
+    time.sleep(0.5)
+    return event_name
 
 
 def ensure_task_accepted(context: Context) -> bool:
@@ -782,38 +822,15 @@ def _process_post(context: Context) -> bool:
         logger.debug("战后流程完成，已返回大地图")
         return True
 
-    logger.warning("战后奖励流程结束后未直接识别到大地图，尝试处理战后中断事件")
-    if _recover_post_battle_to_bigmap(context):
-        logger.debug("已处理战后中断事件并回到大地图")
+    # 结算后可能又弹出随机事件（例如「表白失败」信纸），它会压住大地图。
+    # 事件识别只有 detect_and_manage_event 一处，这里交给通用的
+    # ensure_at_bigmap 统一处理，不再为战后事件单开一条恢复路径。
+    if ensure_at_bigmap(context):
+        logger.debug("战后流程完成，已返回大地图")
         return True
 
     logger.error("战后流程未能回到大地图")
     return False
-
-
-def _recover_post_battle_to_bigmap(context: Context, max_steps: int = 8) -> bool:
-    """有界处理战斗结算后立即弹出的随机事件，并回到大地图。"""
-    # 局部导入避免 fight_processor -> fight_utils 的模块加载环。
-    from action.fight.fight_processor import detect_and_manage_event
-
-    for step in range(max_steps):
-        img = screencap(context)
-        if img is None:
-            return False
-        if _at_bigmap(context, img):
-            return True
-
-        event_name = detect_and_manage_event(context, img)
-        if event_name:
-            logger.debug(f"战后中断事件已处理: {event_name} ({step + 1}/{max_steps})")
-            time.sleep(0.5)
-            continue
-
-        # 非事件页面仅做一次有界恢复，下一轮必须重新识别状态。
-        _back_or_click_center(context, img)
-        time.sleep(0.5)
-
-    return ensure_at_bigmap(context, max_attempts=2)
 
 
 def _detect_battle_state(context: Context, img: Any) -> str:
