@@ -8,6 +8,7 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 
 from utils import logger
+from utils.screen import screencap
 
 from .battle_grid import (
     BattleGrid,
@@ -43,20 +44,6 @@ class AutoFightProcessor(CustomAction):
     # of 40.  The session survives recovery calls; this high ceiling is only a
     # final safety fuse, while the normal stop condition is a verified result.
     MAX_ACTION_CYCLES = 300
-    # 回合数硬上限：被动阶段跑满 PASSIVE_ROUNDS 后转主动追击，
-# 主动阶段再推到该值仍未结束则判定僵局并主动撤退。
-# 上游作者 2026-10-09 确认的设计：被动 5 回合能解决大部分任务、20 回合能解决大地图；
-# 第 21 回合起进入主动搜索与追击；总回合 40 回合仍未结束才算僵局。
-# 早期注释：2026-09-27 实测「海盗侵袭」可打到 173 回合仍不结束
-    # （敌人全部不可见、我方 4 人满血，每回合只点结束回合），此时
-    # _record_round_advance 每回合都在“有进展”，MAX_NO_PROGRESS_CYCLES
-    # 永远不会触发，只能靠这个硬上限兜底。
-    MAX_CONFIRMED_ROUNDS = 40
-    # 战斗内「设置 → 撤退」按钮坐标（720x1280）与撤退确认框的「确定」。
-    # 撤退弹窗原文：撤退人员不会受伤，不会消耗月份。
-    RETREAT_SETTINGS_POINT = (49, 1237)
-    RETREAT_BUTTON_POINT = (360, 721)
-    RETREAT_CONFIRM_POINT = (516, 731)
     MAX_NO_PROGRESS_CYCLES = 12
     PASSIVE_ROUNDS = 20
     ACTIVE_FROM_ROUND = PASSIVE_ROUNDS + 1
@@ -168,13 +155,6 @@ class AutoFightProcessor(CustomAction):
         )
 
         while self._session.action_cycles < self.MAX_ACTION_CYCLES:
-            if self._session.confirmed_rounds >= self.MAX_CONFIRMED_ROUNDS:
-                logger.error(
-                    f"本场战斗已推进 {self._session.confirmed_rounds} 回合仍未结束，"
-                    f"超过上限 {self.MAX_CONFIRMED_ROUNDS}，判定为僵局并主动撤退"
-                )
-                self._retreat_stuck_battle(context)
-                return CustomAction.RunResult(success=False)
             if context.tasker.stopping:
                 logger.info("任务执行被停止")
                 return CustomAction.RunResult(success=False)
@@ -195,7 +175,7 @@ class AutoFightProcessor(CustomAction):
             # 结算页的红蓝装饰可能被范围节点命中。胜负检测必须先于
             # “残留选择清理”，否则任务完成页会被误当成仍有攻击范围，
             # 点击 Esc 后仍残留并导致流程错误退出。
-            terminal_img = self._screencap(context)
+            terminal_img = screencap(context)
             if terminal_img is None:
                 logger.error("战斗入口截图失败")
                 return CustomAction.RunResult(success=False)
@@ -222,7 +202,7 @@ class AutoFightProcessor(CustomAction):
             # 的敌方与环境目标扫描。只有确认普通画面恢复后才允许建图。
             if not self._set_threat_overlay(context, False):
                 logger.warning("回合建图前威胁层仍开启，本回合只结束等待恢复")
-                recovery_reference = self._screencap(context)
+                recovery_reference = screencap(context)
                 if recovery_reference is None:
                     return CustomAction.RunResult(success=False)
                 recovery_result = self._end_round(
@@ -238,7 +218,7 @@ class AutoFightProcessor(CustomAction):
                 f"战斗回合 {game_round} / 动作循环 "
                 f"{self._session.action_cycles}：建立当前战场快照"
             )
-            round_reference = self._screencap(context)
+            round_reference = screencap(context)
             if round_reference is None:
                 logger.error("建立回合快照失败")
                 return CustomAction.RunResult(success=False)
@@ -314,7 +294,7 @@ class AutoFightProcessor(CustomAction):
                 if no_progress >= self.MAX_NO_PROGRESS_CYCLES:
                     logger.error("连续多轮全局建图没有新增有效战斗目标")
                     return CustomAction.RunResult(success=False)
-                latest = self._screencap(context)
+                latest = screencap(context)
                 if latest is None:
                     return CustomAction.RunResult(success=False)
                 wait_result = self._end_round(context, latest, "全局建图等待")
@@ -346,7 +326,7 @@ class AutoFightProcessor(CustomAction):
                         return CustomAction.RunResult(success=wait_result)
                     self._wait_for_scene_settle(context, timeout=6.0)
                     continue
-                normal_img = self._screencap(context)
+                normal_img = screencap(context)
                 if normal_img is None:
                     return CustomAction.RunResult(success=False)
                 round_grid = self._scan_world_view(
@@ -380,7 +360,7 @@ class AutoFightProcessor(CustomAction):
                             context, self._session.confirmed_rounds
                         ):
                             logger.warning("隐藏敌人格重定位后威胁层刷新失败")
-                        normal_img = self._screencap(context)
+                        normal_img = screencap(context)
                         if normal_img is None:
                             return CustomAction.RunResult(success=False)
                         round_grid = self._scan_world_view(
@@ -410,7 +390,7 @@ class AutoFightProcessor(CustomAction):
                         "局部威胁刷新后敌人位置失效，等待下一回合再探索 "
                         f"({no_progress}/{self.MAX_NO_PROGRESS_CYCLES})"
                     )
-                    latest = self._screencap(context)
+                    latest = screencap(context)
                     if latest is None:
                         return CustomAction.RunResult(success=False)
                     wait_result = self._end_round(
@@ -465,29 +445,6 @@ class AutoFightProcessor(CustomAction):
                     and not environment_mode
                     and last_known_enemy_direction is None
                 ):
-                    # 2026-09-26 22:56 实测：海盗侵袭打到第 8 回合、屏幕上还是
-                    # 「你的回合」，这里仅凭一帧里没找到我方单位就判负 →
-                    # 主动战斗被放弃 → 海盗事件「群岛层战斗未成功结束」→
-                    # 切大陆连败 → 「无法到达目标城市: 翠庭」→ 整条 240 月归零。
-                    # 判负前先确认「是否仍在战斗界面」：还在就结束本回合重新建图。
-                    if self._battle_ui_visible(context):
-                        no_progress = self._session.record_no_progress()
-                        logger.warning(
-                            "未发现我方单位但仍在战斗界面，本回合结束等待重新建图 "
-                            f"({no_progress}/{self.MAX_NO_PROGRESS_CYCLES})"
-                        )
-                        if no_progress < self.MAX_NO_PROGRESS_CYCLES:
-                            latest = self._screencap(context)
-                            if latest is not None:
-                                wait_result = self._end_round(
-                                    context, latest, "无我方单位等待"
-                                )
-                                if wait_result is not None:
-                                    return CustomAction.RunResult(
-                                        success=wait_result
-                                    )
-                                self._wait_for_scene_settle(context, timeout=6.0)
-                                continue
                     logger.warning("当前稳定画面未发现我方单位，停止主动战斗")
                     return CustomAction.RunResult(success=False)
                 logger.warning(
@@ -514,7 +471,7 @@ class AutoFightProcessor(CustomAction):
 
                 # 前一个角色可能移动并改变场景。当前角色行动前必须重新截图，
                 # 不能继续使用回合开始时保存的 Cell / unit_center。
-                current_img = self._screencap(context)
+                current_img = screencap(context)
                 if current_img is None:
                     logger.error("角色行动前截图失败")
                     return CustomAction.RunResult(success=False)
@@ -1332,7 +1289,7 @@ class AutoFightProcessor(CustomAction):
         last_state: Optional[Tuple[Any, BattleGrid, int]] = None
         for attempt in range(1, self.SELECT_CAPTURE_ATTEMPTS + 1):
             time.sleep(self.SELECT_CAPTURE_DELAY)
-            img = self._screencap(context)
+            img = screencap(context)
             if img is None:
                 continue
 
@@ -1400,7 +1357,7 @@ class AutoFightProcessor(CustomAction):
             logger.warning("右上 Esc 点击失败")
             return False
 
-        after_img = self._screencap(context)
+        after_img = screencap(context)
         if after_img is None:
             return False
         range_count = self._action_range_count(context, after_img)
@@ -1416,7 +1373,7 @@ class AutoFightProcessor(CustomAction):
 
     def _clear_stale_selection(self, context: Context) -> bool:
         """每轮建图前清理由中断或失败动作留下的选中覆盖层。"""
-        img = self._screencap(context)
+        img = screencap(context)
         if img is None:
             return False
         range_count = self._action_range_count(context, img)
@@ -1440,7 +1397,7 @@ class AutoFightProcessor(CustomAction):
 
     def _dismiss_role_card(self, context: Context) -> bool:
         """仅在左上人物卡片确实存在时点击收起，并验证卡片消失。"""
-        img = self._screencap(context)
+        img = screencap(context)
         if img is None:
             return False
         card = context.run_recognition("Battle_SelectedRoleCard", img)
@@ -1452,7 +1409,7 @@ class AutoFightProcessor(CustomAction):
             logger.warning("人物卡片收起按钮点击失败")
             return False
 
-        after_img = self._screencap(context)
+        after_img = screencap(context)
         if after_img is None:
             return False
         still_open = context.run_recognition(
@@ -1629,7 +1586,7 @@ class AutoFightProcessor(CustomAction):
             self._threat_overlay_safe = False
             return False
         try:
-            img = self._screencap(context)
+            img = screencap(context)
             if img is None:
                 return False
             self._scan_world_view(
@@ -1693,7 +1650,7 @@ class AutoFightProcessor(CustomAction):
         """
         if self._session is None:
             return None
-        before_img = self._screencap(context)
+        before_img = screencap(context)
         if before_img is None:
             return None
         before_observed = len(self._session.world.observed)
@@ -1701,7 +1658,7 @@ class AutoFightProcessor(CustomAction):
         if not self._pan_camera(context, direction_xy, fine=fine):
             logger.warning(f"{phase}地图滑动动作失败: direction={direction}")
             return None
-        after_img = self._screencap(context)
+        after_img = screencap(context)
         if after_img is None:
             return None
 
@@ -1757,7 +1714,7 @@ class AutoFightProcessor(CustomAction):
 
         action_failures = 0
         try:
-            initial_img = self._screencap(context)
+            initial_img = screencap(context)
             if initial_img is None:
                 return False
             self._scan_world_view(
@@ -1821,7 +1778,7 @@ class AutoFightProcessor(CustomAction):
         failed_pans = 0
 
         for _ in range(14):
-            img = self._screencap(context)
+            img = screencap(context)
             if img is None:
                 return None
             grid = self._scan_world_view(
@@ -2072,7 +2029,7 @@ class AutoFightProcessor(CustomAction):
         self._set_threat_overlay(context, False)
         self._wait_for_scene_settle(context, timeout=3.0)
         restored_grid = BattleGrid()
-        restored_img = self._screencap(context)
+        restored_img = screencap(context)
         if restored_img is not None:
             self.scanner.scan_grid(restored_grid, context, restored_img)
         else:
@@ -2092,7 +2049,7 @@ class AutoFightProcessor(CustomAction):
             )
             time.sleep(0.4)
             self._wait_for_scene_settle(context, timeout=2.0)
-            retry_img = self._screencap(context)
+            retry_img = screencap(context)
             if retry_img is None:
                 continue
             restored_grid = BattleGrid()
@@ -2133,7 +2090,7 @@ class AutoFightProcessor(CustomAction):
             return []
 
         try:
-            img = self._screencap(context)
+            img = screencap(context)
             if img is None:
                 return []
             recognition = context.run_recognition("Battle_ThreatRegion", img)
@@ -2185,7 +2142,7 @@ class AutoFightProcessor(CustomAction):
         origin_score: Optional[float] = None
         restored = False
         try:
-            img = self._screencap(context)
+            img = screencap(context)
             if img is not None:
                 hidden_cell = self._threat_enemy_cell_from_mask(img, allies)
                 origin = self._threat_origin_from_mask(img, allies)
@@ -2485,11 +2442,11 @@ class AutoFightProcessor(CustomAction):
         phase: str,
     ) -> Optional[Tuple[BattleGrid, Any]]:
         """滑动一个视野；只有背景真实移动时才返回新建战场快照。"""
-        before_img = self._screencap(context)
+        before_img = screencap(context)
         if before_img is None or not self._pan_camera(context, direction):
             logger.warning(f"{phase}地图滑动 {direction} 失败")
             return None
-        after_img = self._screencap(context)
+        after_img = screencap(context)
         if after_img is None:
             logger.warning(f"{phase}滑动后截图失败，撤销该方向")
             self._pan_camera(context, (-direction[0], -direction[1]))
@@ -2746,16 +2703,8 @@ class AutoFightProcessor(CustomAction):
         logger.debug(f"{label}: ({x}, {y}), controller_succeeded={succeeded}")
         return succeeded
 
-    @staticmethod
-    def _screencap(context: Context) -> Optional[Any]:
-        job = context.tasker.controller.post_screencap().wait()
-        if not job.succeeded:
-            return None
-        return job.get()
-
-    @staticmethod
     def _detect_battle_result(
-        context: Context, img: Any
+        self, context: Context, img: Any
     ) -> Optional[bool]:
         """识别持久结算页；返回 True/False，仍在战斗则返回 None。"""
         if context.run_recognition("FightFail", img).hit:
@@ -2765,41 +2714,6 @@ class AutoFightProcessor(CustomAction):
             logger.info("识别到战斗胜利结算页，战斗正常结束")
             return True
         return None
-
-    def _battle_ui_visible(self, context: Context) -> bool:
-        """当前画面是否仍在战斗界面（结束回合按钮或「你的回合」横幅）。
-
-        2026-09-26 22:56：海盗侵袭第 8 回合时 `not allies` 分支误判负，
-        用这个判定把「还在战斗」和「已经离开战斗」区分开。
-        """
-        img = self._screencap(context)
-        if img is None:
-            return False
-        if context.run_recognition("FightEndRound", img).hit:
-            return True
-        return context.run_recognition("FightOurRound", img).hit
-
-    def _retreat_stuck_battle(self, context: Context) -> bool:
-        """
-        长回合僵局时主动撤退，让游戏真正离开战斗界面。
-
-        实测（2026-09-27 海盗侵袭卡在 173 回合）：战斗内点
-        「设置 → 撤退 → 确定」即可退出，弹窗原文写明
-        「撤退人员不会受伤，不会消耗月份」，所以撤退是零代价的安全出口。
-        不撤退时游戏会一直停在战斗界面，后续恢复流程会因
-        「右上 Esc 点击失败」耗尽有界步数、进而终止整条年度任务。
-        """
-        for x, y, label in (
-            (*self.RETREAT_SETTINGS_POINT, "战斗设置"),
-            (*self.RETREAT_BUTTON_POINT, "撤退"),
-            (*self.RETREAT_CONFIRM_POINT, "撤退确认"),
-        ):
-            if not self._click_and_log(context, x, y, label):
-                logger.warning(f"僵局撤退：{label} 点击失败，交给上层恢复流程")
-                return False
-            time.sleep(1.2)
-        logger.info("已从僵局战斗撤退，游戏应已回到大地图")
-        return True
 
     def _record_round_advance(self, source: str) -> None:
         if self._session is None:
@@ -2820,7 +2734,7 @@ class AutoFightProcessor(CustomAction):
         已进入胜利/失败终态或操作无法确认。
         """
         for attempt in range(1, 3):
-            current_img = self._screencap(context)
+            current_img = screencap(context)
             if current_img is None:
                 logger.error(f"{phase}结束回合前截图失败")
                 return False
@@ -2846,7 +2760,7 @@ class AutoFightProcessor(CustomAction):
                 self._record_round_advance(f"{phase}结束回合")
                 return None
 
-            latest_img = self._screencap(context)
+            latest_img = screencap(context)
             latest_result = (
                 self._detect_battle_result(context, latest_img)
                 if latest_img is not None
@@ -3150,7 +3064,7 @@ class AutoFightProcessor(CustomAction):
 
     def _set_threat_overlay(self, context: Context, enabled: bool) -> bool:
         for attempt in range(1, 3):
-            img = self._screencap(context)
+            img = screencap(context)
             if img is None:
                 continue
             current = context.run_recognition("Battle_ThreatToggleOn", img).hit
@@ -3170,7 +3084,7 @@ class AutoFightProcessor(CustomAction):
             deadline = time.monotonic() + 1.4
             while time.monotonic() < deadline:
                 time.sleep(0.15)
-                settled_img = self._screencap(context)
+                settled_img = screencap(context)
                 if settled_img is None:
                     continue
                 settled = context.run_recognition(
@@ -3179,7 +3093,7 @@ class AutoFightProcessor(CustomAction):
                 if settled == enabled:
                     return True
 
-        final_img = self._screencap(context)
+        final_img = screencap(context)
         verified = bool(
             final_img is not None
             and context.run_recognition("Battle_ThreatToggleOn", final_img).hit
@@ -3228,7 +3142,7 @@ class AutoFightProcessor(CustomAction):
     ) -> Iterator[Any]:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and not context.tasker.stopping:
-            img = cls._screencap(context)
+            img = screencap(context)
             if img is not None:
                 yield img
             time.sleep(interval)

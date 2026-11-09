@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from maa.context import Context
 from maa.custom_action import CustomAction
 from utils import logger
+from utils.screen import screencap
 import re
 import time
 import json
@@ -82,7 +83,7 @@ def extract_potential(context: Context) -> Potential:
     """
     # 1. 初始化天赋面板锚点位置
     RecoDetail = context.run_recognition(
-        "PanelPropertyInit", context.tasker.controller.post_screencap().wait().get()
+        "PanelPropertyInit", screencap(context)
     )
     if not RecoDetail.hit:
         logger.error("初始化天赋面板锚点位置失败")
@@ -107,7 +108,7 @@ def extract_potential(context: Context) -> Potential:
         # 识别属性名
         reco_attr = context.run_recognition(
             "PanelPropertyItemCheck",
-            context.tasker.controller.post_screencap().wait().get(),
+            screencap(context),
             pipeline_override={
                 "PanelPropertyItemCheck": {
                     "expected": [attr_name, attr_name[0]],
@@ -119,7 +120,7 @@ def extract_potential(context: Context) -> Potential:
         # 识别属性值
         reco_val = context.run_recognition(
             "PanelPropertyNumCheck",
-            context.tasker.controller.post_screencap().wait().get(),
+            screencap(context),
             pipeline_override={"PanelPropertyNumCheck": {"roi": val_roi}},
         )
 
@@ -150,7 +151,7 @@ def extract_bloodlines(context: Context) -> Bloodline:
     """
     # 1. 初始化血脉面板锚点位置
     reco_blood = context.run_recognition(
-        "PanelBloodInit", context.tasker.controller.post_screencap().wait().get()
+        "PanelBloodInit", screencap(context)
     )
     if not reco_blood.hit:
         logger.error("初始化血脉面板锚点位置失败")
@@ -161,7 +162,7 @@ def extract_bloodlines(context: Context) -> Bloodline:
 
     # 2. 初始化特性面板锚点位置（用于计算血脉区域高度）
     reco_feature = context.run_recognition(
-        "PanelFeatureInit", context.tasker.controller.post_screencap().wait().get()
+        "PanelFeatureInit", screencap(context)
     )
     if not reco_feature.hit:
         logger.error("初始化特性面板锚点位置失败")
@@ -191,13 +192,13 @@ def extract_bloodlines(context: Context) -> Bloodline:
     # 5. 识别血脉名称和浓度
     reco_names = context.run_recognition(
         "PanelBloodNameCheck",
-        context.tasker.controller.post_screencap().wait().get(),
+        screencap(context),
         pipeline_override={"PanelBloodNameCheck": {"roi": name_roi}},
     )
 
     reco_percents = context.run_recognition(
         "PanelBloodPercentCheck",
-        context.tasker.controller.post_screencap().wait().get(),
+        screencap(context),
         pipeline_override={"PanelBloodPercentCheck": {"roi": percent_roi}},
     )
 
@@ -243,7 +244,7 @@ def extract_features(context: Context, max_swipe_count: int = 5) -> list:
     """
     # 1. 初始化特性面板锚点位置
     reco_feature = context.run_recognition(
-        "PanelFeatureInit", context.tasker.controller.post_screencap().wait().get()
+        "PanelFeatureInit", screencap(context)
     )
     if not reco_feature.hit:
         logger.error("初始化特性面板锚点位置失败")
@@ -276,7 +277,7 @@ def extract_features(context: Context, max_swipe_count: int = 5) -> list:
         # 识别当前页特性
         reco_features = context.run_recognition(
             "PanelFeatureCheck",
-            context.tasker.controller.post_screencap().wait().get(),
+            screencap(context),
             pipeline_override={"PanelFeatureCheck": {"roi": feature_roi}},
         )
 

@@ -3,6 +3,7 @@ from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
 from utils import logger
+from utils.screen import screencap
 
 import re
 import time
@@ -358,7 +359,7 @@ class ChildRec(CustomAction):
         # 识别父母信息
         reco_result = context.run_recognition(
             title_task,
-            context.tasker.controller.post_screencap().wait().get(),
+            screencap(context),
         )
 
         if not reco_result.hit:
@@ -553,7 +554,7 @@ class ChildRec(CustomAction):
         # 1.1 识别是第几个出生的孩子，只有前两个才有公爵，后面的都没有公爵了
         child_index = context.run_recognition(
             "PannelGetChildIndex",
-            context.tasker.controller.post_screencap().wait().get(),
+            screencap(context),
         )
         if not child_index.hit:
             logger.error("识别第几个出生的孩子失败")
@@ -603,7 +604,7 @@ class ChildRec(CustomAction):
         )
 
         # 8.识别是否无效
-        if context.run_recognition("CheckNameInvalid",context.tasker.controller.post_screencap().wait().get()):
+        if context.run_recognition("CheckNameInvalid",screencap(context)):
             context.run_task("CheckNameInvalid")
 
         return CustomAction.RunResult(success=True)

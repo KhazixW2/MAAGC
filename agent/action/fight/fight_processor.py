@@ -2,6 +2,7 @@ from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
 from utils import logger
+from utils.screen import screencap
 import re
 import time
 from typing import Any, Optional
@@ -18,25 +19,17 @@ YEARLY_MONTH_RETRIES = 2
 YEARLY_RECOVERY_STEPS = 12
 YEARLY_MONTH_WAIT_SECONDS = 8.0
 
-# 市场定时采购：清单由界面「市场定时采购」输入框给出（格式 物品:年数）。
-
 
 def _recovery_state(context: Context, img: Any = None) -> str:
     """返回年度流程可处理的稳定状态，不对未知画面做动作。"""
     if img is None:
-        img = fight_utils._screencap(context)
+        img = screencap(context)
     if img is None:
         return "unknown"
     # 交通确认弹窗覆盖在大地图上时，底层 UI_MainWindows 仍会命中。
     # 必须先处理弹窗，否则后续所有城市滑动都会落在遮罩上。
     if context.run_recognition("TravelDialog", img).hit:
         return "travel_dialog"
-    # 进入城市时偶发误落到商城页；商城不是年度流程状态，且禁止
-    # 任何商城/付费资源操作。只允许识别标题后安全返回大地图。
-    if context.run_recognition("MallPageHeader", img).hit:
-        return "mall_page"
-    # 多锚点判定大地图：右下角「佣兵团」图标（UI_MainWindows 的模板）在部分
-    # 界面状态下不渲染，只用它会把这个明明可行走的大地图判成 unknown。
     if fight_utils._at_bigmap(context, img):
         return "bigmap"
     battle_state = fight_utils._detect_battle_state(context, img)
@@ -47,21 +40,12 @@ def _recovery_state(context: Context, img: Any = None) -> str:
     return "unknown"
 
 
-def _screen_fingerprint(img: Any) -> int:
-    """画面内容的廉价指纹，用于判断「同一个事件」背后画面是否其实变了。"""
-    try:
-        return hash(img.tobytes())
-    except Exception:
-        return 0
-
-
 def _recover_yearly_to_bigmap(context: Context, max_steps: int = YEARLY_RECOVERY_STEPS) -> bool:
     """有界恢复年度入口/月份间断点，未知状态直接停止。"""
     last_event = None
-    last_screen = None
     repeated_event_count = 0
     for step in range(max_steps):
-        img = fight_utils._screencap(context)
+        img = screencap(context)
         if img is None:
             logger.error("年度恢复截图失败")
             return False
@@ -84,25 +68,6 @@ def _recover_yearly_to_bigmap(context: Context, max_steps: int = YEARLY_RECOVERY
             time.sleep(0.5)
             continue
 
-        # 年终那一串弹窗（年度结算收入页/支出页 → 口粮预交 → 一键祈祷 → 退出
-        # 确认）在每年 12 月滚动过去时同样会出现，而且**不在丰收节上下文里**，
-        # 之前没人认它，一路走到「未知画面」把整轮停掉（实测 2026-10-02 第
-        # 36/60 个月）。实测 Event_HarvestFestivalDealWith 这条老链能完整吃下
-        # 这一串并停在 UI_MainWindows（大地图），所以这里直接复用它。
-        if (
-            context.run_recognition("AnnualSettlement", img).hit
-            or context.run_recognition("Event_HarvestFestivalPrePay", img).hit
-        ):
-            logger.info(
-                f"年度流程恢复状态: year_end_festival ({step + 1}/{max_steps})"
-            )
-            result = context.run_task("Event_HarvestFestivalDealWith")
-            if not fight_utils._task_succeeded(result):
-                logger.error("年度流程恢复：年终结算/丰收节流程未走完")
-                return False
-            time.sleep(0.8)
-            continue
-
         # 最上层通用提示会遮住佣兵加入等事件按钮；旅行弹窗正文含“前往”，
         # 已由更严格的 TravelDialog 单独识别，不能再把所有“提示”都当旅行。
         if context.run_recognition("TravelDialog", img).hit:
@@ -123,15 +88,10 @@ def _recover_yearly_to_bigmap(context: Context, max_steps: int = YEARLY_RECOVERY
                     f"年度流程恢复状态: event_{event_name} "
                     f"({step + 1}/{max_steps})"
                 )
-                # 同一事件名重复出现不等于卡死：生孩子 / 表白失败这类是「可消耗
-                # 弹窗」，一次调用只关掉一个，后面还排着队（实测连续弹出不同的
-                # 表白失败信）。只有「事件名相同且画面也一模一样」才算没进展。
-                fingerprint = _screen_fingerprint(img)
-                if event_name == last_event and fingerprint == last_screen:
+                if event_name == last_event:
                     repeated_event_count += 1
                 else:
                     last_event = event_name
-                    last_screen = fingerprint
                     repeated_event_count = 1
                 if repeated_event_count > 2:
                     logger.error(f"事件 {event_name} 连续处理无变化，停止恢复")
@@ -153,33 +113,14 @@ def _recover_yearly_to_bigmap(context: Context, max_steps: int = YEARLY_RECOVERY
                 return False
             continue
         if state == "battle_fail":
-            # 战斗失败结算页：点掉它（FightFail = 模板匹配 UI/FightFail.png + Click），
-            # 然后回到循环继续恢复，最终回到大地图。
-            # 旧行为是直接 return False「不自动重开战斗」，代价是整轮年度任务停在这个
-            # 页面上不动（实测 2026-10-03 第 31/60 个月：40 回合僵局主动撤退 → 判负 →
-            # 弹失败页 → 恢复流程在这里放弃 → 整个 60 个月任务终止）。
-            # 点掉失败页并不消耗任何资源，也不会重开战斗，是安全的。
-            logger.warning("恢复时识别到战斗失败结算页，点掉它后继续恢复")
-            result = context.run_task("FightFail")
-            if not fight_utils._task_succeeded(result):
-                logger.error("战斗失败结算页点击失败，停止恢复")
-                return False
-            time.sleep(0.8)
-            continue
+            logger.error("恢复时识别到战斗失败结算页，不自动重开战斗")
+            return False
         if state == "travel_dialog":
             # 只走已知的步行兜底，避免在交通资源状态不明时重复购买/消耗。
             result = context.run_task("TravelDialog_ChooseSlow")
             if not fight_utils._task_succeeded(result):
                 return False
             time.sleep(1.0)
-            continue
-        if state == "mall_page":
-            # 商城页只执行右上角返回，不尝试领取或购买任何礼包。
-            logger.warning("检测到商城页，安全返回大地图，跳过所有商城操作")
-            result = context.run_task("BackButton_500ms")
-            if not fight_utils._task_succeeded(result):
-                return False
-            time.sleep(0.5)
             continue
         if state == "backable":
             result = context.run_task("BackButton_500ms")
@@ -199,31 +140,16 @@ def _wait_for_month_advance(
     """等待地图稳定并确认月份确实前进；未知月份返回 None。"""
     deadline = time.monotonic() + timeout
     observed_month = None
-    cleared = 0
     while time.monotonic() < deadline:
         if context.tasker.stopping:
             return None
-        img = fight_utils._screencap(context)
-        # 多锚点判大地图：只认 UI_MainWindows 时，图标不渲染会让这里一直
-        # 等到超时，月份明明已经前进却被判成「未确认进度」。
+        img = screencap(context)
         if img is None or not fight_utils._at_bigmap(context, img):
             time.sleep(0.3)
             continue
         observed_month = check_current_month(context)
         if observed_month is not None and observed_month != previous_month:
             return observed_month
-        # 读不到月份，常见原因是模态弹窗（生孩子 Event_MercenaryBaby /
-        # 表白失败信 Event_ConfessionFail …）压在月份表盘上并把整屏压暗，
-        # UI/month/*.png 模板因此永远匹配不上。这里按事件表清一次弹窗，
-        # 并给校验窗口续时，避免「刚清完弹窗就到点」。
-        if cleared < 6:
-            event_name = detect_and_manage_event(context, img)
-            if event_name:
-                cleared += 1
-                logger.info(
-                    f"月份校验期间清理弹窗事件: {event_name} ({cleared}/6)"
-                )
-                deadline = max(deadline, time.monotonic() + 6.0)
         time.sleep(0.5)
     logger.error(
         f"月份进度未确认: previous={previous_month}, observed={observed_month}"
@@ -238,7 +164,7 @@ def preprocess_events(context: Context) -> bool:
     max_iterations = 15
     no_event_count = 0
     for i in range(max_iterations):
-        screenshot = context.tasker.controller.post_screencap().wait().get()
+        screenshot = screencap(context)
         event_type = detect_and_manage_event(context, screenshot)
 
         if event_type is None:
@@ -271,54 +197,40 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
     # 战后结算或随机事件可能把视角留在群岛层。目标主城位于大陆层，
     # 此时继续左右滑动永远找不到目标城市；先识别底部“前往大陆”并
     # 有界切层，看到“前往群岛”或目标城市后才继续。
-    #
-    # 2026-09-27 补充：身在大陆层时底栏页签显示当前地区名「加尔提兰」，
-    # 身在群岛层时显示「瑞格群岛」——「前往大陆」这个文案只在大陆层
-    # 以外的部分界面上出现，所以旧判定会漏掉“人在群岛”这个最关键的
-    # 情形（现场：队伍停在瑞格群岛，10 次滑动都找不到翠庭，整条年度
-    # 任务归零）。这里再加上 MapTabArchipelago 作为群岛层判据，并允许
-    # 走「地区切换浮窗」兜底（Event_PirateRaid_GoContinent 就是这条链）。
-    layer_img = context.tasker.controller.post_screencap().wait().get()
-    if (
-        context.run_recognition("ClickGoToContinent", layer_img).hit
-        or context.run_recognition("MapTabArchipelago", layer_img).hit
-    ):
+    layer_img = screencap(context)
+    if layer_img is not None and context.run_recognition(
+        fight_utils.ARCHIPELAGO_READY_NODE, layer_img
+    ).hit:
         logger.info("当前位于群岛层，先切换到大陆层")
-        layer_result = context.run_task("ClickGoToContinent")
-        if not fight_utils._task_succeeded(layer_result):
-            logger.warning("底栏没有「前往大陆」，改走地区切换浮窗")
-            layer_result = context.run_task("Event_PirateRaid_GoContinent")
+        layer_result = context.run_task(fight_utils.ARCHIPELAGO_READY_NODE)
         if not fight_utils._task_succeeded(layer_result):
             logger.error("切换到大陆层的点击节点未成功")
             return False, False
 
-        layer_deadline = time.monotonic() + 5.0
-        layer_ready = False
-        while time.monotonic() < layer_deadline:
-            current_img = context.tasker.controller.post_screencap().wait().get()
-            if (
-                context.run_recognition("ClickGoToArchipelago", current_img).hit
-                or context.run_recognition("EnterCity", current_img).hit
-                or context.run_recognition("MapTabContinent", current_img).hit
-            ):
-                layer_ready = True
-                break
-            time.sleep(0.2)
-        if not layer_ready:
+        if not fight_utils._wait_for_recognition(
+            context, fight_utils.CONTINENT_READY_NODES, timeout=5.0
+        ):
             logger.error("点击前往大陆后未确认进入大陆层")
             return False, False
 
-    # 原项目的城市归中规避：无条件先向左、再向右，稳定城市入口位置，
-    # 避免翠庭靠近右侧固定商城按钮时 EnterCity 偏移误点商城。
-    logger.debug(f"定位 {target_city} 前执行主城左右归中")
-    context.run_task("Map_MoveMainCityLeft")
-    context.run_task("Map_MoveMainCityRight")
-
     def target_city_visible() -> bool:
-        current_img = context.tasker.controller.post_screencap().wait().get()
+        current_img = screencap(context)
         return context.run_recognition("EnterCity", current_img).hit
 
     if target_city_visible():
+        return True, False
+
+    # 战后通常仍停在目标主城附近。先向左探测一格，再向右回到原位并
+    # 再检测一次；只有近邻探测均未命中，才进入原有的连续右滑搜索。
+    logger.info(f"未直接识别到 {target_city}，先进行左右近邻探测")
+    context.run_task("Map_MoveMainCityLeft")
+    if target_city_visible():
+        logger.info(f"近邻探测找到目标城市: {target_city}")
+        return True, False
+
+    context.run_task("Map_MoveMainCityRight")
+    if target_city_visible():
+        logger.info(f"回到原视野后找到目标城市: {target_city}")
         return True, False
 
     logger.info(f"不在目标城市，开始滑动寻找...")
@@ -328,7 +240,7 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
         )
         context.run_task("Map_MoveMainCityRight")
 
-        current_img = context.tasker.controller.post_screencap().wait().get()
+        current_img = screencap(context)
         reco_detail = context.run_recognition("EnterCity", current_img)
         if reco_detail.hit and reco_detail.best_result:
             current_city = reco_detail.best_result.text
@@ -340,15 +252,13 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
                 #   - 佩里亚诺：乘船 (200银, 本月已用变灰) / 步行 (1月)
                 #   - 瓦斯塔亚：乘船 (无此交通工具, 灰) / 步行 (1月)
                 # 必须先验证弹窗真的消失，否则就是点了禁用按钮。
-                travel_img = (
-                    context.tasker.controller.post_screencap().wait().get()
-                )
+                travel_img = screencap(context)
                 if not context.run_recognition(
                     "TravelDialog", travel_img
                 ).hit:
                     if context.run_recognition(
                         "EnterCity_Confirm",
-                        context.tasker.controller.post_screencap().wait().get(),
+                        screencap(context),
                     ).hit:
                         context.run_task("EnterCity_Confirm")
                     logger.info("已到达目标城市")
@@ -368,9 +278,7 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
                 else:
                     context.run_task("TravelDialog_ChooseFast")
                     time.sleep(2.5)
-                    post_fast_img = (
-                        context.tasker.controller.post_screencap().wait().get()
-                    )
+                    post_fast_img = screencap(context)
                     if not context.run_recognition(
                         "TravelDialog", post_fast_img
                     ).hit:
@@ -382,9 +290,7 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
                 # 回退到步行（最稳的兜底）
                 context.run_task("TravelDialog_ChooseSlow")
                 time.sleep(2.5)
-                post_slow_img = (
-                    context.tasker.controller.post_screencap().wait().get()
-                )
+                post_slow_img = screencap(context)
                 if context.run_recognition(
                     "TravelDialog", post_slow_img
                 ).hit:
@@ -410,7 +316,7 @@ def detect_and_manage_event(context: Context, screenshot) -> str:
         if AutoNameChild:
             logger.info("佣兵生娃自动起名已开启，执行起名与好苗子检测")
             auto_result = context.run_task("Auto_PannelCheck")
-            remaining_img = context.tasker.controller.post_screencap().wait().get()
+            remaining_img = screencap(context)
             event_remaining = context.run_recognition(
                 "Event_MercenaryBaby", remaining_img
             ).hit
@@ -422,7 +328,7 @@ def detect_and_manage_event(context: Context, screenshot) -> str:
                 if not context.run_recognition("Event_MercenaryBaby", fallback_img).hit:
                     # ChildRec 失败后若详情页不再保留出生文案，有界返回一层。
                     context.run_task("BackButton_500ms")
-                    fallback_img = context.tasker.controller.post_screencap().wait().get()
+                    fallback_img = screencap(context)
                 if context.run_recognition("Event_MercenaryBaby", fallback_img).hit:
                     fallback_result = context.run_task("Event_MercenaryBaby")
                     if not fight_utils._task_succeeded(fallback_result):
@@ -447,25 +353,6 @@ def detect_and_manage_event(context: Context, screenshot) -> str:
         logger.info("检测到告白失败事件")
         context.run_task("Event_ConfessionFailGiveUp")
         return "confession_fail"
-    elif context.run_recognition("Event_GrainConvert", screenshot).hit:
-        # 2026-09-26 19:02 实测：相亲流程把游戏带进「粮食转换」弹窗，而事件表
-        # 里没有它，_recovery_state 判定为 unknown → 「处于未知画面，停止恢复」
-        # → 第 49/240 个月恢复失败，整条 240 月归零。这里补上安全关闭。
-        # 注意：该弹窗只有「确定」一个按钮，点击会按游戏预填的数量兑换一次。
-        logger.info("检测到粮食转换弹窗，按预填数量确认后关闭")
-        context.run_task("Event_GrainConvert")
-        return "grain_convert"
-    elif context.run_recognition("Event_ChildGrowUp", screenshot).hit:
-        # 2026-09-26 21:58 实测：「XX的孩子成年了！可以加入佣兵团 / 招募 · 取消」
-        # 弹窗在事件表里没有任何条目，挡住月份校验与任务板恢复 →
-        # 第 2/240 个月连续两次未确认进度 → 达到重试上限，整条 240 月归零。
-        # 这里补上：交给 Event_MercenaryJoin 链，由界面开关「开启自动接受佣兵」
-        # 决定点「招募」还是「取消」（确认按钮识别不到时会退回取消）。
-        # 2026-09-26 23:11 实测：该弹窗「招募」按钮 OCR 读成「招莫」→ 点不掉 →
-        # 恢复 12 步耗尽 → 第 2/240 个月失败，整条 240 月归零。
-        logger.info("检测到孩子成年弹窗，按「开启自动接受佣兵」开关处理")
-        context.run_task("Event_ChildGrowUp")
-        return "child_grow_up"
     elif context.run_recognition("PopUpWindowTip", screenshot).hit:
         logger.info("检测到提示事件")
         context.run_task("PopUpWindowTip")
@@ -531,35 +418,27 @@ def handle_sailing_festival(context: Context) -> bool:
         logger.warning(f"当前月份不是3月，而是{current_month}月，跳过启航节")
         return True
 
-    if not context.run_recognition(
-        "Event_Launch", context.tasker.controller.post_screencap().wait().get()
-    ).hit:
+    if not context.run_recognition("Event_Launch", screencap(context)).hit:
         logger.info("启航节已过")
         return True
 
     context.run_task("Event_Launch")
-    if context.run_recognition(
-        "Event_LaunchEnter", context.tasker.controller.post_screencap().wait().get()
-    ).hit:
+    if context.run_recognition("Event_LaunchEnter", screencap(context)).hit:
         context.run_task("Event_LaunchEnter")
     elif context.run_recognition(
         "Event_LaunchLongDistance",
-        context.tasker.controller.post_screencap().wait().get(),
+        screencap(context),
     ).hit:
         logger.info("启航节城市距离过远")
         return False
 
-    if context.run_recognition(
-        "Event_LaunchPage", context.tasker.controller.post_screencap().wait().get()
-    ).hit:
+    if context.run_recognition("Event_LaunchPage", screencap(context)).hit:
         context.run_task("Event_LaunchPage")
     else:
         logger.error("无法进入启航节页面")
         return False
 
-    recoDetail = context.run_recognition(
-        "Event_LaunchGoods", context.tasker.controller.post_screencap().wait().get()
-    )
+    recoDetail = context.run_recognition("Event_LaunchGoods", screencap(context))
 
     if recoDetail.hit:
         logger.info(f"检测到{len(recoDetail.filtered_results)}件商品")
@@ -573,7 +452,7 @@ def handle_sailing_festival(context: Context) -> bool:
 
             if context.run_recognition(
                 "Event_LaunchGoodsBuyMax",
-                context.tasker.controller.post_screencap().wait().get(),
+                screencap(context),
             ).hit:
                 context.run_task("Event_LaunchGoodsBuyMax")
 
@@ -820,25 +699,21 @@ def _run_market_purchases(context: Context, items: list[tuple[str, int]]) -> Non
     # 就是被面包那件翻了 20 次页的残留画面害的。进场这一发仍先做有界恢复。
     # 「恢复大地图 → 进场」最多来 MARKET_ENTER_ATTEMPTS 轮：恢复函数是有界的，
     # 可能报成功但画面其实没回大地图，于是紧接着「点城堡」必然点空（01:56 实况）。
-    enter_status = None
+    entered = False
     for attempt in range(1, MARKET_ENTER_ATTEMPTS + 1):
         if not _recover_yearly_to_bigmap(context):
             logger.warning(
                 f"市场定时采购：第 {attempt}/{MARKET_ENTER_ATTEMPTS} 轮无法回到大地图"
             )
             continue
-        enter_detail = context.run_task("MarketEnter")
-        enter_status = (
-            getattr(enter_detail, "status", None) if enter_detail is not None else None
-        )
-        if enter_status is not None and getattr(enter_status, "succeeded", False):
+        if fight_utils._task_succeeded(context.run_task("MarketEnter")):
+            entered = True
             break
-        enter_status = None
         logger.warning(
             f"市场定时采购：第 {attempt}/{MARKET_ENTER_ATTEMPTS} 轮进场失败"
             "（城堡/市场/购买 没点开），再恢复一次画面重试"
         )
-    if enter_status is None:
+    if not entered:
         logger.warning(
             f"市场定时采购：进场失败（城堡/市场/购买 没点开，已重试 "
             f"{MARKET_ENTER_ATTEMPTS} 轮），本次跳过全部采购"
@@ -847,6 +722,7 @@ def _run_market_purchases(context: Context, items: list[tuple[str, int]]) -> Non
     logger.info(f"市场定时采购：已进市场货架，按清单顺序采购 {len(items)} 件")
     try:
         for item, qty in items:
+            # 逐件采购是连续进度，日志里留档即可，终端只报最终结果。
             if qty > 0:
                 logger.info(f"市场定时采购：找 {item}（要 {qty} 个）")
             else:
@@ -922,7 +798,7 @@ def _run_market_purchases(context: Context, items: list[tuple[str, int]]) -> Non
             started = time.monotonic()
             detail = context.run_task("MarketPickOne", pipeline_override=override)
             elapsed = time.monotonic() - started
-            status = getattr(detail, "status", None) if detail is not None else None
+            status = getattr(detail, "status", None)
             node_names = [
                 name
                 for name in (
@@ -934,7 +810,7 @@ def _run_market_purchases(context: Context, items: list[tuple[str, int]]) -> Non
             reached = " -> ".join(node_names) if node_names else "（一个节点都没命中）"
             if status is None:
                 logger.warning(f"市场定时采购：{item} 未返回任务详情，本次未买到")
-            elif getattr(status, "succeeded", False):
+            elif fight_utils._task_succeeded(detail):
                 if "MarketBread_MaxQty" in node_names:
                     amount = f"{qty} 个" if qty > 0 else "剩余全部"
                     logger.info(f"市场定时采购：{item} 已买下（{amount}），用时 {elapsed:.1f}s")
@@ -960,10 +836,7 @@ def _run_market_purchases(context: Context, items: list[tuple[str, int]]) -> Non
         # 不管中间成没成，最后都要把队伍带回大地图：
         # 否则下一个月度任务会从「货架」起步，第一步「点城堡」必然点空。
         leave_detail = context.run_task("MarketLeave")
-        leave_status = (
-            getattr(leave_detail, "status", None) if leave_detail is not None else None
-        )
-        if not (leave_status is not None and getattr(leave_status, "succeeded", False)):
+        if not fight_utils._task_succeeded(leave_detail):
             logger.warning("市场定时采购：离场失败，画面可能仍停在市场")
 
 
@@ -1027,25 +900,6 @@ class YearlyTaskProcessor(CustomAction):
                     )
                     return CustomAction.RunResult(success=False)
                 previous_month = check_current_month(context)
-                if previous_month is None:
-                    # 出生页/随机事件可能在恢复之后又弹出来盖住月份盘。
-                    # 2026-10-03 实测：第 13/60 个月被「孩子出生」的角色属性页
-                    # 挡住 → check_current_month 认不到 → 直接放弃整条年度任务。
-                    # 这里再清几轮事件并重试，仍然看不到月份盘才放弃。
-                    for rescue in range(YEARLY_MONTH_RETRIES + 1):
-                        handled = fight_utils._handle_blocking_event(context)
-                        if not handled and not _recover_yearly_to_bigmap(context):
-                            break
-                        previous_month = check_current_month(context)
-                        if previous_month is not None:
-                            logger.info(
-                                f"清掉遮挡事件后重新看到月份盘: {previous_month} 月"
-                            )
-                            break
-                        logger.warning(
-                            f"月度开始前仍看不到月份盘，清事件后重试 "
-                            f"({rescue + 1}/{YEARLY_MONTH_RETRIES + 1})"
-                        )
                 if previous_month is None:
                     logger.error("无法识别月度任务开始月份，停止而不盲目重试")
                     return CustomAction.RunResult(success=False)

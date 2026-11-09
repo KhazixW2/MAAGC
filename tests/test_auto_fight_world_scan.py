@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
 
@@ -57,7 +58,6 @@ class WorldViewScanTests(unittest.TestCase):
         processor = self.make_processor()
         processor._session.no_progress_cycles = 5
         frames = iter((object(), object()))
-        processor._screencap = lambda _context: next(frames)
         processor._pan_camera = lambda *_args, **_kwargs: True
         processor._camera_motion = lambda *_args: (-120.0, 0.0, 1.0)
         processor._camera_shift_is_real = lambda *_args: True
@@ -70,9 +70,13 @@ class WorldViewScanTests(unittest.TestCase):
 
         processor._scan_world_view = scan_with_transient_enemy
 
-        result = processor._pan_world_once(
-            object(), (0, 1), 3, overlay_open=True, phase="test"
-        )
+        with patch(
+            "action.zshg.auto_fight_processor.screencap",
+            side_effect=lambda _context: next(frames),
+        ):
+            result = processor._pan_world_once(
+                object(), (0, 1), 3, overlay_open=True, phase="test"
+            )
 
         self.assertIsNotNone(result)
         self.assertEqual(5, processor._session.no_progress_cycles)
@@ -191,7 +195,6 @@ class FocusKnownAllyTests(unittest.TestCase):
         processor._session = BattleSessionState(key="focus-boundary")
         processor._set_threat_overlay = lambda *_args: True
         image = object()
-        processor._screencap = lambda _context: image
 
         grid = BattleGrid()
         ally = grid.get_cell(9, 3)
@@ -201,7 +204,10 @@ class FocusKnownAllyTests(unittest.TestCase):
             lambda *_args, **_kwargs: (False, None, image)
         )
 
-        focused = processor._focus_known_ally(object(), round_seen=4)
+        with patch(
+            "action.zshg.auto_fight_processor.screencap", return_value=image
+        ):
+            focused = processor._focus_known_ally(object(), round_seen=4)
 
         self.assertIsNotNone(focused)
         self.assertIs(grid, focused[0])

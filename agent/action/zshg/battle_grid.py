@@ -14,6 +14,7 @@ from typing import Any, Iterable, Iterator, List, Optional, Tuple
 
 from maa.context import Context, RecognitionDetail
 from utils import logger
+from utils.screen import screencap
 
 current_file_path = os.path.abspath(__file__)
 current_script_dir = os.path.dirname(current_file_path)
@@ -158,7 +159,7 @@ class GridScanner:
         我方蓝色状态条识别，因此只重扫敌方，保留同帧敌人与范围坐标。
         """
         if img is None:
-            img = context.tasker.controller.post_screencap().wait().get()
+            img = screencap(context)
 
         grid.reset()
 
@@ -459,7 +460,7 @@ class GridScanner:
     ) -> Any:
         """在同一张当前截图上扫描攻击/移动范围。"""
         if img is None:
-            img = context.tasker.controller.post_screencap().wait().get()
+            img = screencap(context)
 
         grid.reset_flags()
         # 检测攻击范围（红色）

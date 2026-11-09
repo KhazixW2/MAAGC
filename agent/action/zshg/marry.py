@@ -5,6 +5,7 @@ from maa.context import Context
 from maa.custom_action import CustomAction
 from maa.define import NeuralNetworkResult
 from utils import logger
+from utils.screen import screencap
 
 import re
 import time
@@ -319,13 +320,13 @@ class MarryProcessor(CustomAction):
         context.run_task("CastleHall")
 
         if not context.run_recognition(
-            "CastleMarryWindow", context.tasker.controller.post_screencap().wait().get()
+            "CastleMarryWindow", screencap(context)
         ).hit:
             logger.error("联姻界面未进入,可能存在Bug")
             return False
 
         logger.info("联姻界面已显示")
-        img = context.tasker.controller.post_screencap().wait().get()
+        img = screencap(context)
 
         if not self._check_objects_count(context, img):
             return False
@@ -392,7 +393,7 @@ class MarryProcessor(CustomAction):
     def _find_available_candidates(self, context: Context) -> list:
         """扫描所有格子，找出可相亲的对象"""
         available_boxes = []
-        img = context.tasker.controller.post_screencap().wait().get()
+        img = screencap(context)
 
         for row_idx, row_boxes in enumerate(self.all_boxes):
             for col_idx, box in enumerate(row_boxes):
@@ -506,7 +507,7 @@ class MarryProcessor(CustomAction):
         """检查年龄并过滤，大于等于45岁则跳过"""
         RecoEmail = context.run_recognition(
             "CastleMarry_AgeCheck",
-            context.tasker.controller.post_screencap().wait().get(),
+            screencap(context),
         )
         if RecoEmail.hit:
             age_text = RecoEmail.best_result.text
@@ -644,7 +645,7 @@ class MarryProcessor(CustomAction):
         """识别媒人说话内容"""
         reco = context.run_recognition(
             "CastleMarryMatchmakerSpeech",
-            context.tasker.controller.post_screencap().wait().get(),
+            screencap(context),
         )
         return reco.best_result.text if reco.hit else ""
 
@@ -713,7 +714,7 @@ class MarryProcessor(CustomAction):
 
         crop_roi: [x, y, width, height] = [336, 139, 330, 240]
         """
-        img = context.tasker.controller.post_screencap().wait().get()
+        img = screencap(context)
 
         # 裁剪面部区域 [x, y, width, height] 图片
         crop_roi = [336, 139, 330, 240]
@@ -804,7 +805,7 @@ class MarryProcessor(CustomAction):
 
             reco_result = context.run_recognition(
                 "CastleMarryJustThisReadName",
-                context.tasker.controller.post_screencap().wait().get(),
+                screencap(context),
             )
 
             if not reco_result.hit:
@@ -952,7 +953,7 @@ class WeddingProcessor(CustomAction):
         # 1. 先检查是否在婚礼界面
         if not context.run_recognition(
             "Event_WeddingPage",
-            context.tasker.controller.post_screencap().wait().get(),
+            screencap(context),
         ).hit:
             logger.error("婚礼界面未进入,可能存在Bug")
             return CustomAction.RunResult(success=False)
@@ -963,11 +964,11 @@ class WeddingProcessor(CustomAction):
         # 2.1 检测当前双方最高爵位
         left_title = context.run_recognition(
             "Event_WeddingTitleCheckLeft",
-            context.tasker.controller.post_screencap().wait().get(),
+            screencap(context),
         )
         right_title = context.run_recognition(
             "Event_WeddingTitleCheckRight",
-            context.tasker.controller.post_screencap().wait().get(),
+            screencap(context),
         )
 
         # 提取左右两侧的爵位

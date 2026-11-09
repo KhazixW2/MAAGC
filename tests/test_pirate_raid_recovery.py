@@ -90,7 +90,7 @@ class PirateRaidRecoveryTests(unittest.TestCase):
 
         with (
             patch(
-                "action.fight.pirate_raid_processor._screencap",
+                "action.fight.pirate_raid_processor.screencap",
                 side_effect=[initial_img, resumed_img],
             ),
             patch(
@@ -145,7 +145,7 @@ class PirateRaidRecoveryTests(unittest.TestCase):
 
         with (
             patch(
-                "action.fight.fight_processor.fight_utils._screencap",
+                "action.fight.fight_processor.screencap",
                 side_effect=[battle_page, bigmap],
             ),
             patch(
