@@ -1,10 +1,11 @@
 from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
+from dataclasses import dataclass
 import time
 from typing import Any, Optional, Set
 
-from utils import logger
+from utils import logger, progress
 from utils.screen import screencap
 from action.zshg.battle_world_map import BattleSessionRegistry, session_key
 from action.zshg.task_hud_recognizer import TaskHudRecognizer
@@ -16,6 +17,40 @@ ARCHIPELAGO_READY_NODE = "ClickGoToContinent"
 CONTINENT_READY_NODES = ("ClickGoToArchipelago", "EnterCity")
 
 
+
+@dataclass
+class YearlyProgress:
+    """年度任务的进度状态。
+
+    月度流程的各个阶段共用同一行进度显示：阶段推进时原地刷新同一行，
+    终端上随时能看到「第几个月、哪个城市、正在做什么」，而不是每个阶段
+    都刷一条新日志。
+    """
+
+    month_index: int = 0
+    total_months: int = 0
+    city: str = ""
+
+    def set_month(self, month_index: int, total_months: int) -> None:
+        """切换到新的月份。"""
+        self.month_index = month_index
+        self.total_months = total_months
+
+    def update(self, stage: str) -> None:
+        """刷新年度任务的进度行。"""
+        parts = []
+        if self.total_months:
+            parts.append(f"第 {self.month_index}/{self.total_months} 月")
+        if self.city:
+            parts.append(self.city)
+        parts.append(stage)
+        # depth=3：日志里的调用位置要落在调用本方法的业务代码上，
+        # 而不是这层封装里。
+        progress.update(" · ".join(parts), depth=3)
+
+
+# 年度任务是单线程顺序执行的，用一个共享实例承载进度状态。
+yearly_progress = YearlyProgress()
 
 
 def Map_CheckCurrentMonth(context: Context) -> int:
@@ -50,7 +85,7 @@ def Map_CheckCurrentMonth(context: Context) -> int:
         candidates.append((score, i))
     if candidates:
         score, month = max(candidates)
-        logger.info(f"当前游戏月份为：{month}月 (模板得分={score:.3f})")
+        logger.debug(f"当前游戏月份为：{month}月 (模板得分={score:.3f})")
         return month
     logger.error("未识别到当前游戏月份")
     return -1
@@ -175,7 +210,7 @@ def open_city_task_panel(context: Context, max_steps: int = 12) -> bool:
         if img is None:
             return False
         if context.run_recognition("InTaskPannel", img).hit:
-            logger.info(f"主城任务板已就绪 ({step + 1}/{max_steps})")
+            logger.debug(f"主城任务板已就绪 ({step + 1}/{max_steps})")
             return True
 
         if context.run_recognition("TravelDialog", img).hit:
@@ -291,7 +326,7 @@ def abandon_noncombat_accepted_task(context: Context, max_swipes: int = 5) -> bo
     if not context.run_recognition("TaskQuickLocation", img).hit:
         return True
 
-    logger.info("检测到已接取任务，进入主城任务板校验任务类型")
+    logger.debug("检测到已接取任务，进入主城任务板校验任务类型")
     if context.run_recognition("UI_TaskPannelPageClose", img).hit:
         if not _task_succeeded(context.run_task("UI_TaskPannelPageClose")):
             return False
@@ -341,7 +376,7 @@ def abandon_noncombat_accepted_task(context: Context, max_swipes: int = 5) -> bo
                 if remaining:
                     logger.error("非战斗任务仍显示为已接取，放弃动作未生效")
                     return False
-                logger.info("非战斗任务已直接放弃（当前版本无二次确认框）")
+                logger.debug("非战斗任务已直接放弃（当前版本无二次确认框）")
             tip_img = screencap(context)
             if tip_img is not None and context.run_recognition(
                 "PopUpWindowTip", tip_img
@@ -353,7 +388,7 @@ def abandon_noncombat_accepted_task(context: Context, max_swipes: int = 5) -> bo
         if swipe_index < max_swipes:
             context.run_task("FindCityTask_SwipeDown")
 
-    logger.info("当前已接取任务未命中采购/配送规则，保留并继续执行")
+    logger.debug("当前已接取任务未命中采购/配送规则，保留并继续执行")
     context.run_task("BackButton_500ms")
     return ensure_at_bigmap(context)
 
@@ -382,7 +417,7 @@ class SingleFightTaskProcessor(CustomAction):
     def run(
         self, context: Context, argv: CustomAction.RunArg
     ) -> CustomAction.RunResult:
-        logger.info("====== 单次战斗任务开始 ======")
+        logger.debug("====== 单次战斗任务开始 ======")
 
         # 战后可能停在群岛层；普通任务在配置的主城接取。
         # 仅复用定位逻辑，不执行月度事件或节日处理。
@@ -400,7 +435,7 @@ class SingleFightTaskProcessor(CustomAction):
 
         success = start_task(context)
         if success:
-            logger.info("====== 单次战斗任务完成，已回到大地图 ======")
+            logger.debug("====== 单次战斗任务完成，已回到大地图 ======")
         else:
             logger.error("单次战斗任务失败，停止后续任务")
         return CustomAction.RunResult(success=success)
@@ -416,7 +451,8 @@ def _preprocess_accept_task(context: Context) -> bool:
     Returns:
         bool: 前处理成功返回 True
     """
-    logger.info("====== 接取任务 ======")
+    logger.debug("====== 接取任务 ======")
+    yearly_progress.update("接取任务")
 
     if not ensure_at_bigmap(context):
         return False
@@ -467,9 +503,9 @@ def _accept_new_task(context: Context) -> bool:
                 return True
 
             if swipe_count < max_swipe_times:
-                logger.info(
-                    f"HUD未识别到有效任务，正在滑动刷新... "
-                    f"({swipe_count + 1}/{max_swipe_times})"
+                # 连续刷新属于进度信息，用单行进度显示：终端上原地刷新同一行。
+                progress.update(
+                    f"HUD 任务板滑动刷新 ({swipe_count + 1}/{max_swipe_times})"
                 )
                 context.run_task("FindCityTask_SwipeDown")
         return False
@@ -502,7 +538,8 @@ def _process_fight(context: Context) -> bool:
     Returns:
         bool: 战斗成功返回 True，失败返回 False
     """
-    logger.info("====== 战斗阶段 ======")
+    logger.debug("====== 战斗阶段 ======")
+    yearly_progress.update("战斗")
 
     if not _process_pre(context):
         logger.error("战斗前置流程失败，未进入战斗准备页")
@@ -574,7 +611,8 @@ def _process_pre(context: Context) -> bool:
 
 def _process_fighting(context: Context) -> bool:
     """从战斗准备页或已开始的战场接管，并运行主动战斗处理器。"""
-    logger.info("====== 主动战斗 ======")
+    logger.debug("====== 主动战斗 ======")
+    yearly_progress.update("战斗中")
 
     initial_state = _wait_for_battle_state(
         context,
@@ -610,7 +648,7 @@ def _process_fighting(context: Context) -> bool:
         battle_session_key,
         force_new=entered_from_start,
     )
-    logger.info(
+    logger.debug(
         "稳定战斗界面已就绪，接入 AutoFightProcessor: "
         f"new={entered_from_start}, confirmed_rounds={session.confirmed_rounds}, "
         f"explored={len(session.world.observed)}"
@@ -625,7 +663,7 @@ def _process_fighting(context: Context) -> bool:
         timeout=5.0,
     )
     if terminal_state == "victory":
-        logger.info("AutoFightProcessor 已完成正式战斗并识别到胜利结算页")
+        logger.debug("AutoFightProcessor 已完成正式战斗并识别到胜利结算页")
         BattleSessionRegistry.end(battle_session_key)
         return True
     if terminal_state == "fail":
@@ -665,6 +703,7 @@ def _start_battle_and_wait_ready(context: Context, max_attempts: int = 3) -> str
 
 
 def _process_post(context: Context) -> bool:
+    yearly_progress.update("战后处理")
     victory_img = screencap(context)
     if victory_img is not None and context.run_recognition(
         "FightVictory", victory_img
@@ -690,12 +729,12 @@ def _process_post(context: Context) -> bool:
     # 结束确认
     context.run_task("FightResult_ReturnBigMap")
     if _wait_for_recognition(context, "UI_MainWindows", timeout=6.0):
-        logger.info("战后流程完成，已返回大地图")
+        logger.debug("战后流程完成，已返回大地图")
         return True
 
     logger.warning("战后奖励流程结束后未直接识别到大地图，尝试处理战后中断事件")
     if _recover_post_battle_to_bigmap(context):
-        logger.info("已处理战后中断事件并回到大地图")
+        logger.debug("已处理战后中断事件并回到大地图")
         return True
 
     logger.error("战后流程未能回到大地图")
@@ -716,7 +755,7 @@ def _recover_post_battle_to_bigmap(context: Context, max_steps: int = 8) -> bool
 
         event_name = detect_and_manage_event(context, img)
         if event_name:
-            logger.info(f"战后中断事件已处理: {event_name} ({step + 1}/{max_steps})")
+            logger.debug(f"战后中断事件已处理: {event_name} ({step + 1}/{max_steps})")
             time.sleep(0.5)
             continue
 

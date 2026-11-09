@@ -7,7 +7,7 @@ from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
 
-from utils import logger
+from utils import logger, progress
 from utils.screen import screencap
 
 from .battle_grid import (
@@ -259,7 +259,7 @@ class AutoFightProcessor(CustomAction):
 
             world = self._session.world
             if not world.has_allies() or not self._world_has_fresh_targets():
-                logger.info(
+                logger.debug(
                     "全局地图缺少我方或敌人，触发威胁层顺时针探索: "
                     f"allies={world.has_allies()}, "
                     f"enemies={self._world_has_fresh_targets()}"
@@ -523,7 +523,7 @@ class AutoFightProcessor(CustomAction):
                     )
                 if not current_targets and action_pursuit is None:
                     if environment_mode:
-                        logger.info(
+                        logger.debug(
                             "环境目标在当前角色快照中不可见，"
                             "跳过本角色并在下一回合重新建图"
                         )
@@ -534,7 +534,7 @@ class AutoFightProcessor(CustomAction):
                         environment_mode,
                     ) = self._world_pursuit(current_grid)
                     if action_pursuit is None:
-                        logger.info(
+                        logger.debug(
                             "当前角色帧没有可用全局目标，跳过角色；"
                             "下一回合重新触发探索"
                         )
@@ -619,13 +619,13 @@ class AutoFightProcessor(CustomAction):
                     round_had_action = True
 
                 if action_advanced_round:
-                    logger.info("动作后常驻回合数字已变化，游戏已自动进入下一回合")
+                    logger.debug("动作后常驻回合数字已变化，游戏已自动进入下一回合")
                     round_advanced = True
 
                 if round_advanced:
                     break
                 if moved_to is not None and action_pursuit is not None:
-                    logger.info(
+                    logger.debug(
                         "远端追击移动已确认成功；停止调度其余角色并结束本回合，"
                         "下一回合重新建图后继续接近或攻击"
                     )
@@ -648,7 +648,7 @@ class AutoFightProcessor(CustomAction):
             # 最后一名角色行动后，游戏可能自行结束我方回合。留一个短暂
             # 宽限期，仅当常驻回合数字没有变化时才点击结束回合。
             if self._wait_for_round_change(context, round_reference, timeout=1.5):
-                logger.info("检测到自动换回合，跳过结束回合按钮")
+                logger.debug("检测到自动换回合，跳过结束回合按钮")
                 self._record_round_advance("角色行动后自动换回合")
                 self._wait_for_scene_settle(context, timeout=6.0)
                 continue
@@ -703,7 +703,9 @@ class AutoFightProcessor(CustomAction):
                 attack_targets,
                 key=lambda cell: self._screen_distance(cell, ally, "attack"),
             )
-            logger.info(f"攻击目标格子: ({target.row}, {target.col})")
+            # 目标格子每回合都在变，属于连续刷新的进度信息：
+            # 终端上原地覆盖同一行，日志文件里仍逐条保留。
+            self._refresh_progress(f"攻击目标 ({target.row}, {target.col})")
             if not self._click_cell(context, target, "攻击"):
                 return False, None, False
             accepted, advanced = self._verify_action_result(
@@ -752,7 +754,7 @@ class AutoFightProcessor(CustomAction):
             # 攻击目标。锯齿中心来自当前威胁层、且与所选我方八方向相邻
             # 时，按游戏的点对点规则直接双击该格；远端地图记忆不走此
             # 分支，避免把过期坐标当成可点击敌人。
-            logger.info(
+            logger.debug(
                 "相邻锯齿威胁中心虽无黄色角标，直接双击攻击格子: "
                 f"({hidden_target.row}, {hidden_target.col})"
             )
@@ -795,7 +797,7 @@ class AutoFightProcessor(CustomAction):
                 # 点击未被黄色范围确认的敌人只会打开资料面板，并不会攻击。
                 # 把当前角色视为本轮不可用，交给外层循环改选下一名我方；
                 # 不能用一次假点击消耗动作预算并污染后续截图。
-                logger.info(
+                logger.debug(
                     "当前角色没有已确认的攻击格或移动格，跳过并改选下一名我方"
                 )
             return False, None, False
@@ -860,7 +862,7 @@ class AutoFightProcessor(CustomAction):
         if target is not None:
             pass
         elif used_world_plan:
-            logger.info(
+            logger.debug(
                 "我方已在目标攻击环或没有严格缩短路径的落点，"
                 "本回合不绕行，等待攻击框/敌方位置刷新"
             )
@@ -884,11 +886,11 @@ class AutoFightProcessor(CustomAction):
             if not self._move_reduces_enemy_distance(
                 target, ally, nearest_enemy
             ):
-                logger.info(
+                logger.debug(
                     "局部图没有直接缩短敌我距离的蓝格，"
                     "选择代价最小的八方向绕障格"
                 )
-            logger.info(
+            logger.debug(
                 "当前视野有敌人但没有可信攻击目标，"
                 f"向敌人 ({nearest_enemy.row}, {nearest_enemy.col}) "
                 "选择最远移动格"
@@ -901,7 +903,7 @@ class AutoFightProcessor(CustomAction):
                 else None
             )
             if hidden_target is not None and hidden_target.is_attackable:
-                logger.info(
+                logger.debug(
                     "锯齿威胁中心已进入攻击范围，直接攻击格子: "
                     f"({hidden_target.row}, {hidden_target.col})"
                 )
@@ -939,22 +941,22 @@ class AutoFightProcessor(CustomAction):
                 + (target.row - ally.row) * direction_y
             )
             if projection < 0:
-                logger.info(
+                logger.debug(
                     f"直达方向 {pursuit_direction} 被障碍阻挡，"
                     "按局部图选择代价最小的八方向绕障格"
                 )
             if projection == 0:
-                logger.info(
+                logger.debug(
                     f"直达方向 {pursuit_direction} 被障碍阻挡，"
                     "选择八方向中的垂直绕行格"
                 )
-            logger.info(
+            logger.debug(
                 f"当前视野无敌人，按远端方向 {pursuit_direction} "
                 f"选择投影={projection} 的移动格"
             )
         else:
             return False, None, False
-        logger.info(f"移动目标格子: ({target.row}, {target.col})")
+        self._refresh_progress(f"移动目标 ({target.row}, {target.col})")
         if not self._click_cell(context, target, "移动"):
             return False, None, False
         accepted, advanced = self._verify_action_result(
@@ -1035,7 +1037,7 @@ class AutoFightProcessor(CustomAction):
             )
         if candidates:
             return candidates
-        logger.info("局部图只剩大角度回退格，本回合不移动并等待地图变化")
+        logger.debug("局部图只剩大角度回退格，本回合不移动并等待地图变化")
         return []
 
     def _coarse_move_candidates(
@@ -1142,7 +1144,7 @@ class AutoFightProcessor(CustomAction):
             )
             promoted.append(enemy)
         if promoted:
-            logger.info(
+            logger.debug(
                 "相邻敌人攻击框被本体遮挡，按红条与攻击层恢复目标: "
                 + str([(cell.row, cell.col) for cell in promoted])
             )
@@ -1566,7 +1568,7 @@ class AutoFightProcessor(CustomAction):
             confidence=confidence,
         )
         if local_points:
-            logger.info(
+            logger.debug(
                 "确认锯齿空洞敌人格: "
                 f"local={local_points}, world={world_points}"
             )
@@ -1665,7 +1667,7 @@ class AutoFightProcessor(CustomAction):
         shift_x, shift_y, response = self._camera_motion(before_img, after_img)
         if not self._camera_shift_is_real(shift_x, shift_y, response):
             self._session.world.mark_boundary(direction)
-            logger.info(
+            logger.debug(
                 f"{phase}到达地图边界: direction={direction}, "
                 f"motion=({shift_x:.1f},{shift_y:.1f}), response={response:.3f}"
             )
@@ -1704,7 +1706,7 @@ class AutoFightProcessor(CustomAction):
         explorer = self._session.new_exploration_pass()
         world = self._session.world
         self._coarse_threat_direction = None
-        logger.info(
+        logger.debug(
             f"开始第 {self._session.exploration_passes} 次顺时针全局建图："
             "右 -> 下 -> 左 -> 上"
         )
@@ -1728,7 +1730,7 @@ class AutoFightProcessor(CustomAction):
                     self._world_has_fresh_targets()
                     or self._coarse_threat_direction is not None
                 ):
-                    logger.info("全局地图已同时具备我方和敌人，提前结束探索")
+                    logger.debug("全局地图已同时具备我方和敌人，提前结束探索")
                     break
                 direction = explorer.direction
                 pan_result = self._pan_world_once(
@@ -1754,7 +1756,7 @@ class AutoFightProcessor(CustomAction):
         if not self._threat_overlay_safe:
             logger.error("顺时针探索结束后无法关闭威胁层")
             return False
-        logger.info(
+        logger.debug(
             "顺时针建图结束: "
             f"complete={explorer.completed}, swipes={explorer.successful_swipes}, "
             f"allies={len(world.unit_points(WORLD_SELF))}, "
@@ -1851,7 +1853,7 @@ class AutoFightProcessor(CustomAction):
                 # ally and move toward the retained threat target instead of
                 # re-entering global exploration forever.
                 if actionable:
-                    logger.info(
+                    logger.debug(
                         "镜头已到边界，沿用当前可操作我方视野进入点对点行动"
                     )
                     return grid, img
@@ -1909,7 +1911,7 @@ class AutoFightProcessor(CustomAction):
         found_grid: Optional[BattleGrid] = None
         blocked_direction: Optional[Tuple[int, int]] = None
 
-        logger.info(
+        logger.debug(
             "当前视野没有敌人，开始顺时针螺旋搜索，"
             f"最多滑动 {self.MAX_SEARCH_SWIPES} 次"
         )
@@ -1964,17 +1966,17 @@ class AutoFightProcessor(CustomAction):
                 found_view = views_scanned
                 found_grid = search_grid
                 if found_environment_only:
-                    logger.info(
+                    logger.debug(
                         "搜索视野已确认祭坛/石碑类环境目标："
                         f"数量={found_environment_count}"
                     )
                 elif threat_regions:
-                    logger.info(
+                    logger.debug(
                         "搜索视野已确认隐藏敌人的威胁区域（锯齿中心方向有效）："
                         f"区域数={len(threat_regions)}"
                     )
                 else:
-                    logger.info(
+                    logger.debug(
                         "搜索视野已确认带生命数字的敌人状态条："
                         f"数量={found_enemy_count}"
                     )
@@ -1986,7 +1988,7 @@ class AutoFightProcessor(CustomAction):
             and found_grid.self_units
         ):
             self._set_threat_overlay(context, False)
-            logger.info(
+            logger.debug(
                 f"搜索视野同时保留 {len(found_grid.self_units)} 名我方，"
                 "停留当前视野直接行动，不再逆向返回"
             )
@@ -2009,7 +2011,7 @@ class AutoFightProcessor(CustomAction):
                     if found_environment_only
                     else f"{found_enemy_count} 名敌人"
                 )
-                logger.info(
+                logger.debug(
                     f"远端发现 {target_label}，相对方向={found_direction}，"
                     f"扫描视野={found_view}；已回到我方视野，按方向推进"
                 )
@@ -2068,7 +2070,7 @@ class AutoFightProcessor(CustomAction):
                 if found_environment_only
                 else f"{found_enemy_count} 名敌人"
             )
-            logger.info(
+            logger.debug(
                 f"远端发现 {target_label}，相对方向={found_direction}，"
                 f"扫描视野={found_view}"
             )
@@ -2211,10 +2213,10 @@ class AutoFightProcessor(CustomAction):
             logger.warning("隐匿敌人探测后未能关闭危险覆盖层，放弃本次方向")
             return None
         if direction is None:
-            logger.info("危险覆盖层未发现足够大的可信连通区")
+            logger.debug("危险覆盖层未发现足够大的可信连通区")
             return None
 
-        logger.info(
+        logger.debug(
             f"危险覆盖区 {accepted_box} 相对我方给出隐匿敌人方向 {direction}"
             + (
                 f"，锯齿中心格={self._hidden_enemy_cell}"
@@ -2382,7 +2384,7 @@ class AutoFightProcessor(CustomAction):
         attempted_steps = 0
         blocked_direction: Optional[Tuple[int, int]] = None
 
-        logger.info(
+        logger.debug(
             "开始顺时针螺旋找回我方位置，"
             f"最多滑动 {max_swipes} 次"
         )
@@ -2412,21 +2414,21 @@ class AutoFightProcessor(CustomAction):
                 f"敌人={len(search_grid.enemy_units)}"
             )
             if search_grid.self_units:
-                logger.info(
+                logger.debug(
                     f"重新找到 {len(search_grid.self_units)} 名我方单位，"
                     f"停留在 offset=({offset_x},{offset_y})"
                 )
                 return search_grid
             if self._has_safe_blue_evidence(context, current_img):
                 if not blue_evidence_seen:
-                    logger.info(
+                    logger.debug(
                         f"我方搜索视野 {view_index} 发现蓝色碎片，"
                         "但没有完整我方状态条；继续既定螺旋，"
                         "不追加四方向邻域探查"
                     )
                 blue_evidence_seen = True
 
-        logger.info(
+        logger.debug(
             f"顺时针探索完成（max={max_swipes}, 实际手势={attempted_steps}, "
             f"有效视野移动={len(executed_steps)}）；"
             "未找到完整我方状态条，restore 回原视野"
@@ -2456,7 +2458,7 @@ class AutoFightProcessor(CustomAction):
             before_img, after_img
         )
         if not self._camera_shift_is_real(shift_x, shift_y, response):
-            logger.info(
+            logger.debug(
                 f"{phase}向 {direction} 滑动后背景位移="
                 f"({shift_x:.1f},{shift_y:.1f}), response={response:.3f}，"
                 "判定已到边界"
@@ -2542,7 +2544,7 @@ class AutoFightProcessor(CustomAction):
             )
             if direction is None:
                 break
-            logger.info(
+            logger.debug(
                 "边缘单位重定位: "
                 f"allies={len(unsafe_allies)}, enemies={len(edge_enemies)}, "
                 f"hidden_targets={len(known_edge_cells)}, "
@@ -2706,23 +2708,49 @@ class AutoFightProcessor(CustomAction):
     def _detect_battle_result(
         self, context: Context, img: Any
     ) -> Optional[bool]:
-        """识别持久结算页；返回 True/False，仍在战斗则返回 None。"""
+        """识别持久结算页；返回 True/False，仍在战斗则返回 None。
+
+        同一场战斗会被多个调用点反复检测（每轮结束前、每次动作后），
+        结算提示按 session 只打印一次，避免同一场战斗刷出重复日志。
+        """
         if context.run_recognition("FightFail", img).hit:
-            logger.error("识别到战斗失败结算页")
+            self._report_battle_result(False)
             return False
         if context.run_recognition("FightVictory", img).hit:
-            logger.info("识别到战斗胜利结算页，战斗正常结束")
+            self._report_battle_result(True)
             return True
         return None
+
+    def _report_battle_result(self, victory: bool) -> None:
+        """打印战斗结算结果；同一场战斗只打印一次。"""
+        session = self._session
+        if session is not None and session.reported_result is not None:
+            return
+        if session is not None:
+            session.reported_result = victory
+        if victory:
+            logger.info("识别到战斗胜利结算页，战斗正常结束")
+        else:
+            logger.error("识别到战斗失败结算页")
+
+    def _refresh_progress(self, detail: str = "") -> None:
+        """刷新战斗进度行：回合数与最近一次动作画在同一行。
+
+        终端上原地覆盖，不再逐条刷屏；日志文件里仍逐条保留。
+        """
+        rounds = self._session.confirmed_rounds if self._session else 0
+        message = f"整场战斗 回合 {rounds}"
+        if detail:
+            message += f" · {detail}"
+        # depth=3：日志里的调用位置要落在触发这次刷新的业务代码上，
+        # 而不是这层封装里。
+        progress.update(message, depth=3)
 
     def _record_round_advance(self, source: str) -> None:
         if self._session is None:
             return
         self._session.record_round_advance()
-        logger.info(
-            f"整场战斗回合进度 +1: {self._session.confirmed_rounds} "
-            f"(source={source})"
-        )
+        self._refresh_progress(source)
 
     def _end_round(
         self, context: Context, round_reference: Any, phase: str
@@ -2809,7 +2837,7 @@ class AutoFightProcessor(CustomAction):
                 )
             )
             if changed:
-                logger.info(
+                logger.debug(
                     f"{label}后回合数字连续稳定变化，"
                     f"像素差异={round_score:.2f}，动作已生效"
                 )
@@ -2832,7 +2860,7 @@ class AutoFightProcessor(CustomAction):
                 reached_target = (target.row, target.col) in selected_self_cells
                 still_at_origin = (ally.row, ally.col) in selected_self_cells
                 if reached_target and not still_at_origin:
-                    logger.info(
+                    logger.debug(
                         f"移动确认成功: 我方已从 ({ally.row}, {ally.col}) "
                         f"到达 ({target.row}, {target.col})，"
                         f"菱形行动点={sorted(selected_self_cells)}，"
@@ -2885,14 +2913,14 @@ class AutoFightProcessor(CustomAction):
                         f"预测位置={expected_point}, 实际我方={post_points}"
                     )
                     if reached_target and not still_at_origin:
-                        logger.info(
+                        logger.debug(
                             f"移动确认成功: 清层后我方已从 "
                             f"({ally.row}, {ally.col}) 到达 "
                             f"({target.row}, {target.col})"
                         )
                         return True, False
                     if pixel_reached:
-                        logger.info(
+                        logger.debug(
                             "移动确认成功: 新我方状态条已到达目标蓝格的"
                             f"局部预测位置 {expected_point}"
                         )
@@ -2903,7 +2931,7 @@ class AutoFightProcessor(CustomAction):
                 )
                 required_drop = max(8, int(before_target_red * 0.08))
                 if after_target_red <= before_target_red - required_drop:
-                    logger.info(
+                    logger.debug(
                         "攻击确认成功: 目标红色状态条像素 "
                         f"{before_target_red} -> {after_target_red}"
                     )

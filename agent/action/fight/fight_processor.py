@@ -1,7 +1,7 @@
 from maa.agent.agent_server import AgentServer
 from maa.context import Context
 from maa.custom_action import CustomAction
-from utils import logger
+from utils import logger, progress
 from utils.screen import screencap
 import re
 import time
@@ -57,7 +57,7 @@ def _recover_yearly_to_bigmap(context: Context, max_steps: int = YEARLY_RECOVERY
             context.run_recognition("Event_PirateRaid_TravelDialog", img).hit
             or context.run_recognition("Event_PirateRaid_BattlePage", img).hit
         ):
-            logger.info(
+            logger.debug(
                 f"年度流程恢复状态: pirate_raid "
                 f"({step + 1}/{max_steps})"
             )
@@ -73,7 +73,7 @@ def _recover_yearly_to_bigmap(context: Context, max_steps: int = YEARLY_RECOVERY
         if context.run_recognition("TravelDialog", img).hit:
             state = "travel_dialog"
         elif context.run_recognition("PopUpWindowTip", img).hit:
-            logger.info(
+            logger.debug(
                 f"年度流程恢复状态: popup_tip ({step + 1}/{max_steps})"
             )
             result = context.run_task("PopUpWindowTip")
@@ -84,7 +84,7 @@ def _recover_yearly_to_bigmap(context: Context, max_steps: int = YEARLY_RECOVERY
         else:
             event_name = detect_and_manage_event(context, img)
             if event_name:
-                logger.info(
+                logger.debug(
                     f"年度流程恢复状态: event_{event_name} "
                     f"({step + 1}/{max_steps})"
                 )
@@ -99,7 +99,7 @@ def _recover_yearly_to_bigmap(context: Context, max_steps: int = YEARLY_RECOVERY
                 time.sleep(0.5)
                 continue
             state = _recovery_state(context, img)
-        logger.info(f"年度流程恢复状态: {state} ({step + 1}/{max_steps})")
+        logger.debug(f"年度流程恢复状态: {state} ({step + 1}/{max_steps})")
         if state == "bigmap":
             return True
         if state in {"battle_start", "battle_ready", "battle_victory"}:
@@ -159,7 +159,8 @@ def _wait_for_month_advance(
 
 def preprocess_events(context: Context) -> bool:
     """前处理：检测并处理随机事件"""
-    logger.info("检测随机事件...")
+    logger.debug("检测随机事件...")
+    fight_utils.yearly_progress.update("事件检测")
 
     max_iterations = 15
     no_event_count = 0
@@ -170,7 +171,7 @@ def preprocess_events(context: Context) -> bool:
         if event_type is None:
             no_event_count += 1
             if no_event_count >= 3:
-                logger.info("连续3次无事件，检测完成")
+                logger.debug("连续3次无事件，检测完成")
                 return True
         else:
             no_event_count = 0
@@ -192,6 +193,8 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
     Returns:
         tuple: (是否在目标城市, 是否进行了城市迁移 并点击了确认)
     """
+    fight_utils.yearly_progress.city = target_city
+    fight_utils.yearly_progress.update("寻找城市")
     max_swipe_times = 10
 
     # 战后结算或随机事件可能把视角留在群岛层。目标主城位于大陆层，
@@ -222,21 +225,22 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
 
     # 战后通常仍停在目标主城附近。先向左探测一格，再向右回到原位并
     # 再检测一次；只有近邻探测均未命中，才进入原有的连续右滑搜索。
-    logger.info(f"未直接识别到 {target_city}，先进行左右近邻探测")
+    logger.debug(f"未直接识别到 {target_city}，先进行左右近邻探测")
     context.run_task("Map_MoveMainCityLeft")
     if target_city_visible():
-        logger.info(f"近邻探测找到目标城市: {target_city}")
+        logger.debug(f"近邻探测找到目标城市: {target_city}")
         return True, False
 
     context.run_task("Map_MoveMainCityRight")
     if target_city_visible():
-        logger.info(f"回到原视野后找到目标城市: {target_city}")
+        logger.debug(f"回到原视野后找到目标城市: {target_city}")
         return True, False
 
-    logger.info(f"不在目标城市，开始滑动寻找...")
+    logger.debug(f"不在目标城市，开始滑动寻找...")
     for swipe_count in range(max_swipe_times):
-        logger.info(
-            f"滑动寻找目标城市 {target_city} ({swipe_count + 1}/{max_swipe_times})"
+        # 连续滑动属于进度信息，用单行进度显示：终端上原地刷新同一行。
+        progress.update(
+            f"寻找城市 {target_city} ({swipe_count + 1}/{max_swipe_times})"
         )
         context.run_task("Map_MoveMainCityRight")
 
@@ -244,7 +248,7 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
         reco_detail = context.run_recognition("EnterCity", current_img)
         if reco_detail.hit and reco_detail.best_result:
             current_city = reco_detail.best_result.text
-            logger.info(f"滑动后当前城市: {current_city}")
+            logger.debug(f"滑动后当前城市: {current_city}")
             if current_city == target_city:
                 context.run_task("EnterCity")
                 # 跨王国城市会触发「前往[王国]」传送弹窗。三种已知格式：
@@ -261,7 +265,7 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
                         screencap(context),
                     ).hit:
                         context.run_task("EnterCity_Confirm")
-                    logger.info("已到达目标城市")
+                    logger.debug("已到达目标城市")
                     return True, True
 
                 logger.info(
@@ -379,6 +383,7 @@ def check_current_month(context: Context) -> int:
 
 def handle_festival_by_month(context: Context, month: int) -> bool:
     """根据月份处理节日"""
+    fight_utils.yearly_progress.update("节日处理")
     festival_info = {
         2: "祈灵日，跳过",
         3: "启航节",
@@ -390,7 +395,7 @@ def handle_festival_by_month(context: Context, month: int) -> bool:
         12: "创元节，跳过",
     }
     festival_name = festival_info.get(month, "无节日")
-    logger.info(f"当前月份：{month}月 - 本月：{festival_name}")
+    logger.debug(f"当前月份：{month}月 - 本月：{festival_name}")
 
     if month == 3:
         return handle_sailing_festival(context)
@@ -441,11 +446,13 @@ def handle_sailing_festival(context: Context) -> bool:
     recoDetail = context.run_recognition("Event_LaunchGoods", screencap(context))
 
     if recoDetail.hit:
-        logger.info(f"检测到{len(recoDetail.filtered_results)}件商品")
-        for good in recoDetail.filtered_results:
+        logger.debug(f"检测到{len(recoDetail.filtered_results)}件商品")
+        goods = recoDetail.filtered_results
+        for index, good in enumerate(goods):
             box = good.box
             rect_x, rect_y = box[0] + box[2] // 2, box[1] + box[3] // 2
-            logger.info(f"点击商品：{good.text}")
+            # 连续点击商品属于进度信息，用单行进度显示：终端上原地刷新。
+            progress.update(f"启航节购买商品 ({index + 1}/{len(goods)})")
             context.tasker.controller.post_click(rect_x, rect_y).wait()
             time.sleep(0.5)
             context.run_task("Event_LaunchGoodsBuy")
@@ -458,7 +465,7 @@ def handle_sailing_festival(context: Context) -> bool:
 
             context.run_task("Event_LaunchGoodsBuyConfirm")
     else:
-        logger.info("没有商品")
+        logger.debug("没有商品")
 
     context.run_task("UI_ReturnBigMap")
     return True
@@ -521,7 +528,7 @@ def process_single_month(context: Context) -> bool:
             if target_city_data
             else "王座堡"
         )
-        logger.info(f"目标城市: {target_city}")
+        logger.debug(f"目标城市: {target_city}")
         reached, traveled = _ensure_at_target_city(context, target_city)
         if not reached:
             logger.error(f"无法到达目标城市: {target_city}")
@@ -541,7 +548,7 @@ def process_single_month(context: Context) -> bool:
             return False
 
         if month in CITY_CHANGING_FESTIVAL_MONTHS:
-            logger.info("月度节日可能改变当前城市，接取任务前重新确认目标城市")
+            logger.debug("月度节日可能改变当前城市，接取任务前重新确认目标城市")
             if not fight_utils.ensure_at_bigmap(context):
                 logger.error("节日结束后无法回到大地图界面")
                 return False
@@ -724,9 +731,9 @@ def _run_market_purchases(context: Context, items: list[tuple[str, int]]) -> Non
         for item, qty in items:
             # 逐件采购是连续进度，日志里留档即可，终端只报最终结果。
             if qty > 0:
-                logger.info(f"市场定时采购：找 {item}（要 {qty} 个）")
+                logger.debug(f"市场定时采购：找 {item}（要 {qty} 个）")
             else:
-                logger.info(f"市场定时采购：找 {item}（买光剩余）")
+                logger.debug(f"市场定时采购：找 {item}（买光剩余）")
             override: dict[str, dict] = {
                 "MarketBread_PickBread": {"expected": [item]}
             }
@@ -891,7 +898,9 @@ class YearlyTaskProcessor(CustomAction):
             if context.tasker.stopping:
                 logger.info(f"已停止处理第 {month_offset + 1}/{total_months} 个月")
                 return CustomAction.RunResult(success=False)
-            logger.info(f"开始处理第 {month_offset + 1}/{total_months} 个月")
+            logger.debug(f"开始处理第 {month_offset + 1}/{total_months} 个月")
+            fight_utils.yearly_progress.set_month(month_offset + 1, total_months)
+            fight_utils.yearly_progress.update("恢复大地图")
             completed = False
             for attempt in range(YEARLY_MONTH_RETRIES):
                 if not _recover_yearly_to_bigmap(context):

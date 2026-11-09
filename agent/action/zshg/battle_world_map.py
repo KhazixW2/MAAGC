@@ -358,6 +358,9 @@ class BattleSessionState:
     no_progress_cycles: int = 0
     exploration_passes: int = 0
     last_move_direction: Optional[Direction] = None
+    # 战斗结算结果是否已经打印过。同一场战斗会被多个调用点反复检测，
+    # 结算提示只打一次；新的一场战斗会新建 session，自然重新允许打印。
+    reported_result: Optional[bool] = None
     recent_move_points: List[GridPoint] = field(default_factory=list)
     world: BattleWorldMap = field(default_factory=BattleWorldMap)
     explorer: ClockwiseExplorer = field(default_factory=ClockwiseExplorer)
