@@ -50,3 +50,46 @@ git diff --stat <上游HEAD>   <合并提交>                   # 合并相对�
 ```
 
 （注意：用户的全局 python 规则推荐 pytest，但本项目 venv 未安装，以项目实际为准。）
+
+## 2026-11-09 — 拆分类时别丢框架基类；`run()` 局部变量 ≠ 实例属性
+
+**场景**：把 3280 行的 `auto_fight_processor.py` 拆成 9 个模块（Mixin 组合），
+编译通过、AST 比对全绿，但**运行期直接炸**：
+
+```
+AttributeError: 'AutoFightProcessor' object has no attribute 'c_handle'
+  at maa/agent/agent_server.py -> register_custom_action -> action.c_handle
+```
+
+**根因**：`@AgentServer.custom_action(...)` 装饰器在 **import 时**就实例化
+action 并调用 `register_custom_action`，后者读取 `action.c_handle`
+（`CustomAction` 的 property）。原类是 `class AutoFightProcessor(CustomAction)`，
+拆分后只继承了 Mixin —— **框架基类被悄悄丢掉了**。
+`py_compile` 完全测不出来（它不执行装饰器），只有 import 才暴露。
+
+**教训 1 —— 拆分类先抄基类列表**：
+新类的 `class X(A, B, C)` 必须包含原类的**全部**基类（框架基类、ABC、mixin）。
+MRO 用 C3 线性化，多继承完全兼容：
+
+```python
+class AutoFightProcessor(
+    BattleCameraMixin, ..., BattleActionMixin, CustomAction,
+):
+```
+
+**教训 2 —— 局部变量改实例属性会放大作用域**：
+原实现把"跨回合敌人方向记忆"写成 `run()` 里的**局部变量**，每次调用
+（含任务被恢复后重新调用）都从零开始。顺手改成 `self._last_known_enemy_direction`
+后，记忆会**跨 `run()` 调用残留** —— 因为 `AgentServer` 复用的是同一个
+action 实例（`_custom_action_holder`）。改实例属性时必须逐个确认
+"这个变量原本的作用域是什么"，必要时在 `run()` 开头显式重置。
+
+**教训 3 —— 拆成纯函数会打断 monkeypatch**：
+把实例方法提成模块级函数后，`tests/` 里
+`processor._xxx = lambda ...` 这类打桩会**静默失效**（不再被调用，
+测试却可能因为断言变松而"通过"）。必须同步改 patch 目标到新的模块路径，
+并确认断言仍然真的被执行。
+
+**教训 4 —— 单测数量本身就是回归信号**：
+拆分前 61 tests OK；拆分后 import 失败 → 只跑到 24 个用例（其余模块
+import 失败被跳过）。跑测试时**先看用例总数**，和基线对得上再谈"通过"。

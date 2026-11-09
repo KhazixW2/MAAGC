@@ -10,7 +10,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
 
+from action.zshg import battle_vision
 from action.zshg.auto_fight_processor import AutoFightProcessor
+from action.zshg.battle_geometry import is_adjacent_cell
 from action.zshg.battle_grid import BattleGrid, Cell, CellType
 from action.zshg.battle_world_map import BattleSessionState
 
@@ -59,8 +61,6 @@ class WorldViewScanTests(unittest.TestCase):
         processor._session.no_progress_cycles = 5
         frames = iter((object(), object()))
         processor._pan_camera = lambda *_args, **_kwargs: True
-        processor._camera_motion = lambda *_args: (-120.0, 0.0, 1.0)
-        processor._camera_shift_is_real = lambda *_args: True
 
         def scan_with_transient_enemy(_context, _img, round_seen, **_kwargs):
             processor._session.world.merge_threat_cells(
@@ -70,9 +70,19 @@ class WorldViewScanTests(unittest.TestCase):
 
         processor._scan_world_view = scan_with_transient_enemy
 
-        with patch(
-            "action.zshg.auto_fight_processor.screencap",
-            side_effect=lambda _context: next(frames),
+        with (
+            patch(
+                "action.zshg.battle_camera.screencap",
+                side_effect=lambda _context: next(frames),
+            ),
+            patch(
+                "action.zshg.battle_vision.camera_motion",
+                return_value=(-120.0, 0.0, 1.0),
+            ),
+            patch(
+                "action.zshg.battle_vision.camera_shift_is_real",
+                return_value=True,
+            ),
         ):
             result = processor._pan_world_once(
                 object(), (0, 1), 3, overlay_open=True, phase="test"
@@ -99,8 +109,6 @@ class ThreatCellTests(unittest.TestCase):
 
     def test_region_or_continuous_origin_is_direction_only(self):
         processor = self.make_processor()
-        processor._threat_enemy_cell_from_mask = lambda *_: None
-        processor._threat_origin_from_mask = lambda *_: (600, 180, 0.8)
         context = SimpleNamespace(
             run_recognition=lambda *_: SimpleNamespace(
                 hit=True,
@@ -108,12 +116,22 @@ class ThreatCellTests(unittest.TestCase):
             )
         )
 
-        points = processor._merge_open_threat_overlay(
-            context,
-            np.zeros((1280, 720, 3), dtype=np.uint8),
-            self.make_grid_with_ally(),
-            3,
-        )
+        with (
+            patch(
+                "action.zshg.battle_vision.threat_enemy_cell_from_mask",
+                return_value=None,
+            ),
+            patch(
+                "action.zshg.battle_vision.threat_origin_from_mask",
+                return_value=(600, 180, 0.8),
+            ),
+        ):
+            points = processor._merge_open_threat_overlay(
+                context,
+                np.zeros((1280, 720, 3), dtype=np.uint8),
+                self.make_grid_with_ally(),
+                3,
+            )
 
         self.assertEqual([], points)
         self.assertEqual((1, -1), processor._coarse_threat_direction)
@@ -121,15 +139,18 @@ class ThreatCellTests(unittest.TestCase):
 
     def test_only_exact_jagged_cell_is_persisted(self):
         processor = self.make_processor()
-        processor._threat_enemy_cell_from_mask = lambda *_: (2, 3, 1.2)
         context = SimpleNamespace(run_recognition=lambda *_: None)
 
-        points = processor._merge_open_threat_overlay(
-            context,
-            np.zeros((1280, 720, 3), dtype=np.uint8),
-            self.make_grid_with_ally(),
-            4,
-        )
+        with patch(
+            "action.zshg.battle_vision.threat_enemy_cell_from_mask",
+            return_value=(2, 3, 1.2),
+        ):
+            points = processor._merge_open_threat_overlay(
+                context,
+                np.zeros((1280, 720, 3), dtype=np.uint8),
+                self.make_grid_with_ally(),
+                4,
+            )
 
         self.assertEqual([(2, 3)], points)
         self.assertEqual([(2, 3)], processor._session.world.unit_points("enemy"))
@@ -149,7 +170,7 @@ class ThreatCellTests(unittest.TestCase):
         hsv[y0 : y0 + 120, x0 + 95 : x0 + 120] = red
         image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
-        result = processor._threat_enemy_cell_from_mask(image, [])
+        result = battle_vision.threat_enemy_cell_from_mask(image, [])
 
         self.assertIsNotNone(result)
         self.assertEqual((row, col), result[:2])
@@ -205,7 +226,7 @@ class FocusKnownAllyTests(unittest.TestCase):
         )
 
         with patch(
-            "action.zshg.auto_fight_processor.screencap", return_value=image
+            "action.zshg.battle_camera.screencap", return_value=image
         ):
             focused = processor._focus_known_ally(object(), round_seen=4)
 
@@ -312,13 +333,40 @@ class OccludedAttackTargetTests(unittest.TestCase):
         ally = Cell(5, 3)
 
         self.assertTrue(
-            AutoFightProcessor._is_adjacent_cell(ally, Cell(4, 2))
+            is_adjacent_cell(ally, Cell(4, 2))
         )
         self.assertFalse(
-            AutoFightProcessor._is_adjacent_cell(ally, Cell(5, 3))
+            is_adjacent_cell(ally, Cell(5, 3))
         )
         self.assertFalse(
-            AutoFightProcessor._is_adjacent_cell(ally, Cell(5, 1))
+            is_adjacent_cell(ally, Cell(5, 1))
+        )
+
+
+class ActionKindTests(unittest.TestCase):
+    """动作标签 → 点击方式 / 结果校验语义的唯一约定。"""
+
+    def test_attack_labels_map_to_attack(self):
+        for label in ("攻击", "相邻威胁中心攻击", "威胁中心攻击"):
+            self.assertEqual("attack", AutoFightProcessor._action_kind(label))
+
+    def test_move_label_maps_to_move(self):
+        self.assertEqual("move", AutoFightProcessor._action_kind("移动"))
+
+    def test_click_cell_uses_the_click_point_matching_the_label(self):
+        processor = AutoFightProcessor.__new__(AutoFightProcessor)
+        clicked = []
+        processor._click_and_log = (
+            lambda _context, x, y, _label: clicked.append((x, y)) or True
+        )
+        cell = Cell(2, 3, move_center=(300, 400), attack_center=(310, 410))
+
+        with patch("action.zshg.battle_action.time.sleep"):
+            processor._click_cell(object(), cell, "移动")
+            processor._click_cell(object(), cell, "威胁中心攻击")
+
+        self.assertEqual(
+            [(300, 400), (300, 400), (310, 410), (310, 410)], clicked
         )
 
 

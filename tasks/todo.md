@@ -382,3 +382,77 @@ err:第 7/12 个月达到重试上限，停止年度任务
 - 有横幅时滑动关闭（`BigMapDismissItemGainBanner`）
 - 横幅一直不消失时按重试上限收手
 - `open_city_task_panel` 点城市之前先关横幅
+
+---
+
+## 战斗处理器拆分（`auto_fight_processor.py` 3280 → 9 个模块）
+
+> 需求：简化代码、抽象函数、拆分文件，单文件不超过 1000 行。
+> 方案：Mixin 能力类（`AutoFightProcessor` 组合 5 个能力 Mixin）。
+
+### 拆分结果
+
+| 文件 | 行数 | 职责 |
+| --- | --- | --- |
+| `auto_fight_processor.py` | 786 | 主类 `AutoFightProcessor`：主循环、主动阶段建图、角色调度 |
+| `battle_camera.py` | 768 | `BattleCameraMixin`：镜头平移、顺时针建图、边缘单位重定位 |
+| `battle_decision.py` | 532 | `BattleDecisionMixin`：单角色的攻击 / 移动决策与落点规划 |
+| `battle_action.py` | 523 | `BattleActionMixin`：选中态、点击、动作结果校验、回合推进 |
+| `battle_vision.py` | 430 | 纯 cv2 函数：掩膜解析、威胁区域、菱形定位、镜头位移 |
+| `battle_planner.py` | 346 | `BattlePlannerMixin`：世界地图合并与移动落点规划 |
+| `battle_threat.py` | 204 | `BattleThreatMixin`：危险覆盖层开关与隐匿敌人方向推断 |
+| `battle_geometry.py` | 101 | 纯几何函数：方向、距离、邻接、质心 |
+| `battle_support.py` | 52 | `BattleSupport`：跨能力共享常量与状态声明 |
+
+### 抽象与简化
+
+- **14 个实例方法 → 模块级纯函数**（`battle_vision` / `battle_geometry`）：
+  `_threat_enemy_cell_from_mask`、`_threat_origin_from_mask`、`_camera_motion`、
+  `_camera_shift_is_real`、`_is_adjacent_cell`、`_sign_direction`、
+  `_grid_direction`、`_screen_distance` 等。这些函数不依赖战斗状态，
+  便于单独测试与复用。
+- **魔法数字 → 具名常量**：`THREAT_HSV_LOW/HIGH`、`HEALTH_HSV_LOW/HIGH`、
+  `DIAMOND_*`、`THREAT_CELL_*`、`BATTLE_AREA_HEIGHT/WIDTH` 等。
+- **动作语义集中为 `_action_kind(label)`**（`battle_support.py`）：点击方式
+  （`action_click_point("attack"/"move")`）与结果校验语义（血条变化 /
+  菱形行动点）原本在 `battle_action.py` 两处各写一套字符串判断，现统一到
+  一处；`_ActionPlan.is_attack` 随之删除，标签成为唯一事实来源。
+- **`run()` 拆成 5 个可读步骤**：`_run_battle_round` → `_prepare_active_round`
+  → `_act_with_allies` → `_run_active_round`；建图结论用
+  `ActiveRoundStatus` + `_ActiveRoundResult` 显式表达（READY / WAIT / FAILED）。
+- **`_decide_and_act()` 拆成 13 个聚焦方法**（`battle_decision.py`），
+  攻击与移动分成两条独立执行分支。
+- **删除 3 个死方法**：`_hidden_enemy_direction`、`_search_for_allies_and_stay`、
+  `_ally_at_grid_edge`（全仓库 grep 无调用），以及两个只写不读的属性。
+
+### 过程中发现并修复的两个真实回归
+
+1. **丢掉 `CustomAction` 基类** —— 拆分后 `AutoFightProcessor` 只继承 Mixin，
+   不再是 `CustomAction` 子类，`AgentServer.custom_action` 注册时直接抛
+   `AttributeError: 'AutoFightProcessor' object has no attribute 'c_handle'`，
+   **整个测试模块 import 失败**。已把 `CustomAction` 加回基类列表。
+2. **敌人方向记忆的作用域被放大** —— 原实现是 `run()` 内的局部变量，
+   每次调用（含任务恢复）都从零开始；改成实例属性后会跨 `run()` 调用残留。
+   已在 `run()` 开头显式重置，恢复原有语义。
+
+### 拆分后的验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| `python -m py_compile agent/action/zshg/*.py` | ✓ COMPILE OK |
+| `python -m unittest discover -s tests` | ✓ **64 tests, OK**（HEAD 基线 61 条 + 新增 3 条） |
+| `python check_resource.py assets/resource/base` | ✓ All directories checked. |
+| 未使用导入扫描（AST） | ✓ 0 处 |
+| `self.xxx` 未定义属性扫描（AST） | ✓ 0 处 |
+| 方法迁移前后 AST 归一化比对 | ✓ 61 个方法：35 个完全一致，13 个为纯委派差异（已逐个核对），13 个为魔法数字改常量 |
+| 单文件行数 | ✓ 全部 ≤ 1000（最大 788） |
+| 独立复核（子代理对照 HEAD 逐条核对控制流） | ✓ 未发现行为变更；返修 2 处 LOW（动作标签约定分散两处、记忆刷新与判空的隐式耦合）+ 1 处过期文档引用 |
+| `tools/ci/install_cli.py` 重新打包 | ✓ 打包版本可导入，`AutoFightProcessor` 注册成功 |
+
+### 测试同步更新
+
+`tests/test_auto_fight_world_scan.py` / `tests/test_progress_logging.py` 里
+针对已迁走的实例方法做 monkeypatch 的地方，改为 patch 新的模块级函数
+（`action.zshg.battle_vision.*` / `action.zshg.battle_geometry.*`）与
+`action.zshg.battle_camera.screencap`、`action.zshg.battle_action.progress`。
+断言的行为本身未变。

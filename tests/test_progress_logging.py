@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
 
-from action.zshg import auto_fight_processor as afp
+from action.zshg import battle_action
 from action.zshg.auto_fight_processor import AutoFightProcessor
 from action.zshg.battle_world_map import BattleSessionState
 from action.fight import fight_processor as fp
@@ -121,7 +121,7 @@ class BattleProgressTests(unittest.TestCase):
         processor = self.make_processor()
         fake = FakeProgress()
 
-        with patch.object(afp, "progress", fake):
+        with patch.object(battle_action, "progress", fake):
             processor._record_round_advance("被动阶段结束回合")
 
         self.assertEqual(fake.messages, ["整场战斗 回合 1 · 被动阶段结束回合"])
@@ -130,7 +130,7 @@ class BattleProgressTests(unittest.TestCase):
         processor = self.make_processor()
         fake = FakeProgress()
 
-        with patch.object(afp, "progress", fake):
+        with patch.object(battle_action, "progress", fake):
             processor._refresh_progress("攻击目标 (3, 5)")
             processor._refresh_progress()
 
