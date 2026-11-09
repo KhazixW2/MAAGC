@@ -16,6 +16,13 @@ from action.zshg.task_hud_recognizer import TaskHudRecognizer
 ARCHIPELAGO_READY_NODE = "ClickGoToContinent"
 CONTINENT_READY_NODES = ("ClickGoToArchipelago", "EnterCity")
 
+# 「获得 xx」奖励横幅：结算后残留在大地图上，会盖住城市名让点击落空。
+# 横幅是屏幕上的模态面板：点面板内部无效，只有在面板之外点一下或滑一下
+# 才会消失，所以关闭动作必须落在横幅之外。
+ITEM_GAIN_BANNER_NODE = "BigMapItemGainBanner"
+ITEM_GAIN_BANNER_DISMISS_NODE = "BigMapDismissItemGainBanner"
+# 横幅在随机事件流程里的事件名：它和随机事件一样属于打断流程的浮层。
+ITEM_GAIN_BANNER_EVENT = "item_gain_banner"
 
 
 @dataclass
@@ -124,6 +131,45 @@ def _back_or_click_center(context: Context, img: Any) -> None:
         context.run_task("ClickCenter_500ms")
 
 
+def dismiss_item_gain_banner(
+    context: Context, max_tries: int = 3, img: Any = None
+) -> bool:
+    """有界地关掉大地图上残留的「获得 xx」奖励横幅。
+
+    战斗或事件结算后，大地图上会残留一条「获得 物品」横幅。它盖住城市名，
+    ``EnterCity`` 的点击落在横幅上被吞掉，场景不变化，任务板就永远打不开
+    （表现为「进入任务板状态连续无变化: open_city_list」）。
+
+    横幅是屏幕上的模态面板（实测 2026-11-09）：点面板内部（比如横幅标题）
+    没有任何反应，只有在面板**之外**点一下或滑一下才会消失；面板外的点击
+    会被横幅吃掉，不会顺带触发底下的城市或商城按钮。
+
+    这里用一次滑动来关闭：滑动不会被当成点击，最坏情况只是让地图平移几十
+    像素，城市仍在识别范围内。返回 True 表示横幅已消失；False 表示试了若干
+    次仍未确认消失。
+
+    掉落横幅每场战斗结算都会出现，属于常规噪声，日志只记 debug；
+    真正失败时才用 warning 提醒。``img`` 可以传入调用方已有的截图，
+    避免重复截屏。
+    """
+    for attempt in range(max_tries):
+        if img is None:
+            img = screencap(context)
+        if img is None:
+            return False
+        if not context.run_recognition(ITEM_GAIN_BANNER_NODE, img).hit:
+            return True
+        logger.debug(f"检测到「获得」奖励横幅，滑动关闭（第 {attempt + 1} 次）")
+        if not _task_succeeded(context.run_task(ITEM_GAIN_BANNER_DISMISS_NODE)):
+            logger.warning("关闭「获得」奖励横幅的滑动未成功")
+        time.sleep(0.3)
+        img = None
+
+    img = screencap(context)
+    if img is not None and not context.run_recognition(ITEM_GAIN_BANNER_NODE, img).hit:
+        return True
+    logger.warning("「获得」奖励横幅未能关闭，按当前画面继续")
+    return False
 
 
 def ensure_at_bigmap(
@@ -301,6 +347,9 @@ def open_city_task_panel(context: Context, max_steps: int = 12) -> bool:
             state = "open_city_list"
             if not accept_state(state):
                 return False
+            # 结算残留的「获得 xx」横幅会吞掉落在它上面的点击（场景不变），
+            # 先把它关掉，再点城市。
+            dismiss_item_gain_banner(context)
             if not _task_succeeded(context.run_task("EnterCity")):
                 return False
             continue

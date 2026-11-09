@@ -168,6 +168,155 @@ class YearlyProgressTests(unittest.TestCase):
         self.assertEqual(self.fake.messages, ["事件检测"])
 
 
+class ItemGainBannerTests(unittest.TestCase):
+    """「获得 xx」横幅会盖住城市名，必须先关掉它再点城市。"""
+
+    class _Context:
+        def __init__(self, hits):
+            self.hits = list(hits)
+            self.recognitions = []
+            self.tasks = []
+
+        def run_recognition(self, node, img=None):
+            self.recognitions.append(node)
+            hit = self.hits.pop(0) if self.hits else False
+            return SimpleNamespace(hit=hit)
+
+        def run_task(self, node):
+            self.tasks.append(node)
+            return SimpleNamespace(status=SimpleNamespace(succeeded=True))
+
+    def test_returns_immediately_when_no_banner(self):
+        context = self._Context([False])
+
+        with patch.object(fu, "screencap", lambda ctx: object()):
+            gone = fu.dismiss_item_gain_banner(context)
+
+        self.assertTrue(gone)
+        self.assertEqual([], context.tasks)
+        self.assertEqual([fu.ITEM_GAIN_BANNER_NODE], context.recognitions)
+
+    def test_swipes_to_close_the_banner(self):
+        context = self._Context([True, False])
+
+        with (
+            patch.object(fu, "screencap", lambda ctx: object()),
+            patch.object(fu.time, "sleep"),
+        ):
+            gone = fu.dismiss_item_gain_banner(context)
+
+        self.assertTrue(gone)
+        self.assertEqual([fu.ITEM_GAIN_BANNER_DISMISS_NODE], context.tasks)
+
+    def test_gives_up_after_reaching_the_retry_limit(self):
+        context = self._Context([True] * 50)
+
+        with (
+            patch.object(fu, "screencap", lambda ctx: object()),
+            patch.object(fu.time, "sleep"),
+        ):
+            gone = fu.dismiss_item_gain_banner(context, max_tries=2)
+
+        self.assertFalse(gone)
+        self.assertEqual(2, len(context.tasks))
+
+    def test_city_click_closes_the_banner_first(self):
+        """点城市之前必须先关掉横幅，否则点击会被吞掉、场景不变。"""
+        order = []
+
+        class _CityContext(self._Context):
+            def run_recognition(self, node, img=None):
+                self.recognitions.append(node)
+                return SimpleNamespace(hit=node == "EnterCity", best_result=None)
+
+            def run_task(self, node):
+                order.append(node)
+                return SimpleNamespace(status=SimpleNamespace(succeeded=True))
+
+        context = _CityContext([])
+        real_dismiss = fu.dismiss_item_gain_banner
+
+        def recording_dismiss(ctx, max_tries=3):
+            order.append("dismiss")
+            return real_dismiss(ctx, max_tries)
+
+        with (
+            patch.object(fu, "screencap", lambda ctx: object()),
+            patch.object(fu.time, "sleep"),
+            patch.object(fu, "dismiss_item_gain_banner", recording_dismiss),
+        ):
+            fu.open_city_task_panel(context, max_steps=2)
+
+        self.assertEqual(["dismiss", "EnterCity"], order[:2])
+
+
+class ItemGainBannerEventTests(unittest.TestCase):
+    """掉落横幅在随机事件流程里被清掉，不再每回合单独刷一条日志。"""
+
+    class _Context:
+        def __init__(self, banner_hit=True, bigmap_hit=True):
+            self.banner_hit = banner_hit
+            self.bigmap_hit = bigmap_hit
+            self.tasks = []
+
+        def run_recognition(self, node, img=None):
+            if node == fu.ITEM_GAIN_BANNER_NODE:
+                return SimpleNamespace(hit=self.banner_hit)
+            if node == "UI_MainWindows":
+                return SimpleNamespace(hit=self.bigmap_hit)
+            return SimpleNamespace(hit=False)
+
+        def run_task(self, node):
+            self.tasks.append(node)
+            if node == fu.ITEM_GAIN_BANNER_DISMISS_NODE:
+                self.banner_hit = False
+            return SimpleNamespace(status=SimpleNamespace(succeeded=True))
+
+    def test_banner_is_closed_in_the_event_flow(self):
+        context = self._Context()
+
+        with patch.object(fu, "screencap", lambda ctx: object()):
+            event = fp.detect_and_manage_event(context, object())
+
+        self.assertEqual(fu.ITEM_GAIN_BANNER_EVENT, event)
+        self.assertEqual([fu.ITEM_GAIN_BANNER_DISMISS_NODE], context.tasks)
+
+    def test_banner_is_not_touched_outside_the_big_map(self):
+        context = self._Context(bigmap_hit=False)
+
+        with patch.object(fu, "screencap", lambda ctx: object()):
+            event = fp.detect_and_manage_event(context, object())
+
+        self.assertIsNone(event)
+        self.assertEqual([], context.tasks)
+
+    def test_banner_event_is_not_logged_as_info(self):
+        records = []
+        sink_id = logger.add(
+            lambda message: records.append(
+                (message.record["level"].name, message.record["message"])
+            ),
+            level="INFO",
+        )
+        context = self._Context()
+
+        try:
+            with (
+                patch.object(fp, "screencap", lambda ctx: object()),
+                patch.object(fp.time, "sleep"),
+                patch.object(fu, "screencap", lambda ctx: object()),
+            ):
+                handled = fp.preprocess_events(context)
+        finally:
+            logger.remove(sink_id)
+
+        self.assertTrue(handled)
+        infos = [msg for level, msg in records if level == "INFO"]
+        self.assertEqual(
+            [], [msg for msg in infos if fu.ITEM_GAIN_BANNER_EVENT in msg]
+        )
+
+
 class BattleResultLogTests(unittest.TestCase):
     def setUp(self):
         self.messages = []

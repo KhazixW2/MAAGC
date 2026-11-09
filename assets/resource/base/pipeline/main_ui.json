@@ -672,6 +672,37 @@
     "post_delay": 500,
     "timeout": 2000
   },
+  "BigMapItemGainBanner": {
+    "recognition": "OCR",
+    "expected": [
+      "获得"
+    ],
+    "roi": [
+      200,
+      250,
+      320,
+      140
+    ],
+    "timeout": 2000
+  },
+  "BigMapDismissItemGainBanner": {
+    "recognition": "DirectHit",
+    "action": "Swipe",
+    "begin": [
+      195,
+      600,
+      1,
+      1
+    ],
+    "end": [
+      255,
+      600,
+      1,
+      1
+    ],
+    "post_delay": 500,
+    "timeout": 2000
+  },
   "UI_PopInform": {
     "focus": {
       "Node.Action.Succeeded": {

@@ -175,7 +175,11 @@ def preprocess_events(context: Context) -> bool:
                 return True
         else:
             no_event_count = 0
-            logger.info(f"事件处理完成: {event_type}")
+            # 掉落横幅每场战斗都会出现，属于常规噪声，不占用控制台。
+            if event_type == fight_utils.ITEM_GAIN_BANNER_EVENT:
+                logger.debug(f"事件处理完成: {event_type}")
+            else:
+                logger.info(f"事件处理完成: {event_type}")
             
         time.sleep(0.3)
     logger.error(f"随机事件处理超过 {max_iterations} 轮仍未收敛，停止当前任务")
@@ -196,6 +200,9 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
     fight_utils.yearly_progress.city = target_city
     fight_utils.yearly_progress.update("寻找城市")
     max_swipe_times = 10
+
+    # 结算残留的「获得 xx」横幅会盖住城市名，点击会落在横幅上。
+    fight_utils.dismiss_item_gain_banner(context)
 
     # 战后结算或随机事件可能把视角留在群岛层。目标主城位于大陆层，
     # 此时继续左右滑动永远找不到目标城市；先识别底部“前往大陆”并
@@ -310,6 +317,14 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
 
 def detect_and_manage_event(context: Context, screenshot) -> str:
     """检测事件类型"""
+    # 「获得 xx」掉落横幅是大地图上的模态面板，会吞掉后续所有点击。
+    # 它和随机事件一样属于打断流程的浮层，统一在事件流程里清掉，
+    # 免得每次找城市都要单独判一次。
+    # 只有确认还在大地图上才滑动，避免误伤结算页。
+    if context.run_recognition(fight_utils.ITEM_GAIN_BANNER_NODE, screenshot).hit:
+        if fight_utils._at_bigmap(context, screenshot):
+            fight_utils.dismiss_item_gain_banner(context, img=screenshot)
+            return fight_utils.ITEM_GAIN_BANNER_EVENT
     if context.run_recognition("Event_MercenaryJoin", screenshot).hit:
         logger.info("检测到佣兵加入事件")
         context.run_task("Event_MercenaryJoin")
