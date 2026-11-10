@@ -1,3 +1,14 @@
+"""战斗编排层：把 map / classify / action / strategy 四层组合成一场战斗。
+
+本模块只负责流程编排——什么时候建图、什么时候让角色行动、什么时候结束
+回合——不再自己实现任何识别或操作逻辑：
+
+- :class:`~action.fight.battle_classify.GridClassifier` 识别格子内容
+- :class:`~action.fight.battle_mapping.BattleMapBuilder` 维护局部与全局地图
+- :class:`~action.fight.battle_strategy.BattleStrategy` 决定每个角色做什么
+- :class:`~action.fight.battle_action.BattleActions` 执行所有游戏操作
+"""
+
 import os
 from dataclasses import dataclass, field
 from enum import Enum
@@ -10,17 +21,22 @@ from maa.custom_action import CustomAction
 from utils import logger
 from utils.screen import screencap
 
-from .battle_action import BattleActionMixin
-from .battle_camera import BattleCameraMixin
-from .battle_decision import BattleDecisionMixin
-from .battle_grid import COLS, ROWS, BattleGrid, Cell, CellType, GridScanner
-from .battle_planner import BattlePlannerMixin
-from .battle_threat import BattleThreatMixin
-from .battle_world_map import (
+from .battle_action import BattleActions
+from .battle_classify import GridClassifier, ThreatClassifier
+from .battle_geometry import ally_is_actionable
+from .battle_map import (
+    COLS,
+    ROWS,
+    BattleGrid,
+    BattleRuntime,
     BattleSessionRegistry,
     BattleSessionState,
+    Cell,
+    CellKind,
     session_key,
 )
+from .battle_mapping import BattleMapBuilder
+from .battle_strategy import BattleStrategy
 
 
 class ActiveRoundStatus(Enum):
@@ -68,24 +84,14 @@ class _RoundOutcome:
 
 
 @AgentServer.custom_action("AutoFightProcessor")
-class AutoFightProcessor(
-    BattleCameraMixin,
-    BattleThreatMixin,
-    BattlePlannerMixin,
-    BattleDecisionMixin,
-    BattleActionMixin,
-    CustomAction,
-):
+class AutoFightProcessor(CustomAction):
     """先被动等待反击，超过指定回合后执行主动战斗。
 
     策略：前 20 轮全部依赖「结束回合 + 自动反击」，让敌人自己走过来；
     仅当 20 轮后仍未通关时，才进入主动搜索与追击模式。这样可以减少决策
     次数，避免每局都触发 16 视野螺旋搜索的低性价比操作。
 
-    具体能力按职责拆分为 ``BattleCameraMixin``（镜头与建图）、
-    ``BattleThreatMixin``（危险覆盖层）、``BattlePlannerMixin``（地图合并）、
-    ``BattleDecisionMixin``（单角色决策）与 ``BattleActionMixin``
-    （点击与结果校验）五个能力类。
+    四层职责见模块 docstring；本类只做编排。
     """
 
     # A battle can legitimately last well beyond the old per-invocation limit
@@ -103,16 +109,13 @@ class AutoFightProcessor(
 
     def __init__(self) -> None:
         super().__init__()
-        self.scanner = GridScanner()
-        self._coarse_threat_direction: Optional[Tuple[int, int]] = None
-        self._last_confirmed_move_direction: Optional[Tuple[int, int]] = None
-        self._threat_overlay_safe = True
-        self._session: Optional[BattleSessionState] = None
-        # 跨回合敌人方向记忆：上次成功搜索到的敌人相对原点的螺旋方向。
-        # 我方按此方向推进若干回合，敌人可能也在接近，自然碰面。
-        self._last_known_enemy_direction: Optional[Tuple[int, int]] = None
-        # 自上次成功记录方向以来经过的回合数；超过阈值后丢弃记忆。
-        self._last_known_enemy_age = 0
+        self.classifier = GridClassifier()
+        self.threat_classifier = ThreatClassifier()
+        self.session: Optional[BattleSessionState] = None
+        self.runtime = BattleRuntime()
+        self.actions: Optional[BattleActions] = None
+        self.mapper: Optional[BattleMapBuilder] = None
+        self.strategy: Optional[BattleStrategy] = None
 
     # ====================
     # 主循环
@@ -122,43 +125,29 @@ class AutoFightProcessor(
         self, context: Context, _argv: CustomAction.RunArg
     ) -> CustomAction.RunResult:
         """执行整场战斗；恢复调用继续使用同一份地图和回合状态。"""
-        self._session = BattleSessionRegistry.begin(session_key(context))
-        self._last_confirmed_move_direction = (
-            None
-            if self._session.last_move_direction is None
-            else (
-                self._session.last_move_direction[1],
-                self._session.last_move_direction[0],
-            )
-        )
-        self._threat_overlay_safe = True
-        # 跨回合敌人方向记忆：上次成功搜索到的敌人相对原点的螺旋方向。
-        # 我方按此方向推进若干回合，敌人可能也在接近，自然碰面。
-        # 记忆只在本次调用内跨回合有效，任务被恢复时重新开始积累。
-        self._last_known_enemy_direction = None
-        # 自上次成功记录方向以来经过的回合数；超过阈值后丢弃记忆。
-        self._last_known_enemy_age = 0
+        self.session = BattleSessionRegistry.begin(session_key(context))
+        self._build_layers()
 
         # 上一次任务可能在全图搜索中途被外部停止，导致红色危险覆盖层
         # 残留。该覆盖层会污染敌方红色状态条识别；进入任何正式决策前
         # 都先恢复为关闭状态，只有敌人搜索窗口才临时开启。
-        if not self._set_threat_overlay(context, False):
+        if not self.actions.set_threat_overlay(context, False):
             logger.warning("战斗入口未能确认危险覆盖层关闭，继续谨慎识别")
 
         passive_rounds = self._resolve_passive_rounds()
 
         logger.debug(
             "恢复整场战斗会话: "
-            f"confirmed_rounds={self._session.confirmed_rounds}, "
-            f"world_origin={self._session.world.camera_origin}, "
-            f"explored={len(self._session.world.observed)}"
+            f"confirmed_rounds={self.session.confirmed_rounds}, "
+            f"world_origin={self.session.map.camera_origin}, "
+            f"explored={len(self.session.map.observed)}"
         )
 
-        while self._session.action_cycles < self.MAX_ACTION_CYCLES:
+        while self.session.action_cycles < self.MAX_ACTION_CYCLES:
             if context.tasker.stopping:
                 logger.info("任务执行被停止")
                 return CustomAction.RunResult(success=False)
-            self._session.action_cycles += 1
+            self.session.action_cycles += 1
             self._expire_enemy_direction_memory()
 
             round_result = self._run_battle_round(context, passive_rounds)
@@ -169,6 +158,40 @@ class AutoFightProcessor(
             f"战斗达到安全动作循环上限 {self.MAX_ACTION_CYCLES}，停止任务"
         )
         return CustomAction.RunResult(success=False)
+
+    def _build_layers(self) -> None:
+        """按四层组合出本次调用使用的对象。
+
+        依赖通过构造注入，避免各层之间出现模块级循环导入。
+        """
+        assert self.session is not None
+        self.runtime = BattleRuntime()
+        last_direction = self.session.last_move_direction
+        self.runtime.last_confirmed_move_direction = (
+            None
+            if last_direction is None
+            else (last_direction[1], last_direction[0])
+        )
+        self.runtime.threat_overlay_safe = True
+        # 跨回合敌人方向记忆：上次成功搜索到的敌人相对原点的螺旋方向。
+        # 记忆只在本次调用内跨回合有效，任务被恢复时重新开始积累。
+        self.runtime.last_known_enemy_direction = None
+        self.runtime.last_known_enemy_age = 0
+
+        self.actions = BattleActions(self.session, self.classifier)
+        self.mapper = BattleMapBuilder(
+            self.session,
+            self.classifier,
+            self.threat_classifier,
+            self.actions,
+            self.runtime,
+        )
+        self.strategy = BattleStrategy(
+            self.session,
+            self.actions,
+            self.classifier,
+            self.runtime,
+        )
 
     def _resolve_passive_rounds(self) -> int:
         """被动坚守回合数；测试环境变量可提前进入主动阶段。"""
@@ -189,16 +212,19 @@ class AutoFightProcessor(
 
     def _expire_enemy_direction_memory(self) -> None:
         """每个回合开头累加方向记忆年龄，超期后丢弃。"""
-        if self._last_known_enemy_direction is None:
+        if self.runtime.last_known_enemy_direction is None:
             return
-        self._last_known_enemy_age += 1
-        if self._last_known_enemy_age > self.ENEMY_DIRECTION_MEMORY_ROUNDS:
+        self.runtime.last_known_enemy_age += 1
+        if (
+            self.runtime.last_known_enemy_age
+            > self.ENEMY_DIRECTION_MEMORY_ROUNDS
+        ):
             logger.warning(
                 f"敌人方向记忆超过 {self.ENEMY_DIRECTION_MEMORY_ROUNDS} "
                 "回合未刷新，丢弃记忆并切回纯螺旋搜索"
             )
-            self._last_known_enemy_direction = None
-            self._last_known_enemy_age = 0
+            self.runtime.last_known_enemy_direction = None
+            self.runtime.last_known_enemy_age = 0
 
     def _run_battle_round(
         self, context: Context, passive_rounds: int
@@ -215,65 +241,69 @@ class AutoFightProcessor(
         if terminal_img is None:
             logger.error("战斗入口截图失败")
             return False
-        terminal_result = self._detect_battle_result(context, terminal_img)
+        terminal_result = self.actions.detect_battle_result(
+            context, terminal_img
+        )
         if terminal_result is not None:
             return terminal_result
 
         # 外部停止或失败动作可能留下“人物已选中但卡片已收起”的状态。
         # 这时黄色/蓝色行动范围会污染红条扫描，必须先真正点右上 Esc
         # 取消选择，不能把顶部中间的卡片按钮误当成取消按钮。
-        if not self._clear_stale_selection(context):
+        if not self.actions.clear_stale_selection(context):
             logger.error("回合建图前无法清除残留选择状态")
             return False
 
         # 上一名角色也可能只留下了人物卡片。它会遮住红条、黄色攻击
         # 角标和目标点击点，正式建图前仍需验证收起。
-        if not self._dismiss_role_card(context):
+        if not self.actions.dismiss_role_card(context):
             logger.error("回合建图前无法收起人物卡片，停止以避免盲目移动")
             return False
 
         # 上一轮的威胁层若因动画/识别延迟未关闭，红色覆盖会污染本轮
         # 的敌方与环境目标扫描。只有确认普通画面恢复后才允许建图。
-        if not self._set_threat_overlay(context, False):
+        if not self.actions.set_threat_overlay(context, False):
             logger.warning("回合建图前威胁层仍开启，本回合只结束等待恢复")
             recovery_reference = screencap(context)
             if recovery_reference is None:
                 return False
-            recovery_result = self._end_round(
+            recovery_result = self.actions.end_round(
                 context, recovery_reference, "威胁层恢复失败"
             )
             if recovery_result is not None:
                 return recovery_result
-            self._wait_for_scene_settle(context, timeout=6.0)
+            self.actions.wait_for_scene_settle(context, timeout=6.0)
             return None
 
-        game_round = self._session.confirmed_rounds + 1
+        game_round = self.session.confirmed_rounds + 1
         logger.debug(
             f"战斗回合 {game_round} / 动作循环 "
-            f"{self._session.action_cycles}：建立当前战场快照"
+            f"{self.session.action_cycles}：建立当前战场快照"
         )
         round_reference = screencap(context)
         if round_reference is None:
             logger.error("建立回合快照失败")
             return False
 
-        battle_result = self._detect_battle_result(context, round_reference)
+        battle_result = self.actions.detect_battle_result(
+            context, round_reference
+        )
         if battle_result is not None:
             return battle_result
 
         # 所有任务统一先完整结束 20 个回合。判断依据存放在整场会话中，
         # AutoFightProcessor 被恢复逻辑再次调用时不会重新等待 20 回合。
-        if self._session.confirmed_rounds < passive_rounds:
+        if self.session.confirmed_rounds < passive_rounds:
             logger.debug(
                 f"第 {game_round} 回合：统一坚守反击 "
-                f"({self._session.confirmed_rounds}/{passive_rounds})，结束回合"
+                f"({self.session.confirmed_rounds}/{passive_rounds})，结束回合"
             )
-            passive_result = self._end_round(
+            passive_result = self.actions.end_round(
                 context, round_reference, "被动阶段"
             )
             if passive_result is not None:
                 return passive_result
-            self._wait_for_scene_settle(context, timeout=6.0)
+            self.actions.wait_for_scene_settle(context, timeout=6.0)
             return None
 
         return self._run_active_round(context, round_reference, passive_rounds)
@@ -292,12 +322,12 @@ class AutoFightProcessor(
         if prepared.status is ActiveRoundStatus.FAILED:
             return False
         if prepared.status is ActiveRoundStatus.WAIT:
-            wait_result = self._end_round(
+            wait_result = self.actions.end_round(
                 context, prepared.wait_reference, prepared.wait_phase
             )
             if wait_result is not None:
                 return wait_result
-            self._wait_for_scene_settle(context, timeout=6.0)
+            self.actions.wait_for_scene_settle(context, timeout=6.0)
             return None
 
         state = prepared.state
@@ -309,11 +339,11 @@ class AutoFightProcessor(
             return outcome.result
 
         if outcome.advanced:
-            self._wait_for_scene_settle(context, timeout=6.0)
+            self.actions.wait_for_scene_settle(context, timeout=6.0)
             return None
 
         if not outcome.had_action:
-            no_progress = self._session.record_no_progress()
+            no_progress = self.session.record_no_progress()
             logger.warning(
                 "主动回合没有确认任何攻击或移动: "
                 f"{no_progress}/{self.MAX_NO_PROGRESS_CYCLES}"
@@ -324,16 +354,20 @@ class AutoFightProcessor(
 
         # 最后一名角色行动后，游戏可能自行结束我方回合。留一个短暂
         # 宽限期，仅当常驻回合数字没有变化时才点击结束回合。
-        if self._wait_for_round_change(context, state.reference, timeout=1.5):
+        if self.actions.wait_for_round_change(
+            context, state.reference, timeout=1.5
+        ):
             logger.debug("检测到自动换回合，跳过结束回合按钮")
-            self._record_round_advance("角色行动后自动换回合")
-            self._wait_for_scene_settle(context, timeout=6.0)
+            self.actions.record_round_advance("角色行动后自动换回合")
+            self.actions.wait_for_scene_settle(context, timeout=6.0)
             return None
 
-        end_result = self._end_round(context, state.reference, "主动阶段")
+        end_result = self.actions.end_round(
+            context, state.reference, "主动阶段"
+        )
         if end_result is not None:
             return end_result
-        self._wait_for_scene_settle(context, timeout=6.0)
+        self.actions.wait_for_scene_settle(context, timeout=6.0)
         return None
 
     def _prepare_active_round(
@@ -341,48 +375,49 @@ class AutoFightProcessor(
     ) -> _ActiveRoundResult:
         """主动阶段建图：定位我方、敌人与追击方向。"""
         round_grid = BattleGrid()
-        self.scanner.scan_grid(round_grid, context, round_reference)
-        self._merge_world_view(
+        self.classifier.scan_grid(round_grid, context, round_reference)
+        self.mapper.merge_world_view(
             round_grid,
-            self._session.confirmed_rounds,
+            self.session.confirmed_rounds,
             replace_visible=True,
         )
 
-        if self._session.confirmed_rounds == passive_rounds:
+        if self.session.confirmed_rounds == passive_rounds:
             logger.info(
-                f"战斗到达第 {self._session.confirmed_rounds + 1} 回合仍未结束，"
+                f"战斗到达第 {self.session.confirmed_rounds + 1} 回合仍未结束，"
                 "切换为主动搜索与追击模式"
             )
 
-        world = self._session.world
-        if not world.has_allies() or not self._world_has_fresh_targets():
+        world = self.session.map
+        if not world.has_allies() or not self.strategy.world_has_fresh_targets():
             logger.debug(
                 "全局地图缺少我方或敌人，触发威胁层顺时针探索: "
                 f"allies={world.has_allies()}, "
-                f"enemies={self._world_has_fresh_targets()}"
+                f"enemies={self.strategy.world_has_fresh_targets()}"
             )
-            self._explore_world_clockwise(
-                context, self._session.confirmed_rounds
+            self.mapper.explore_world_clockwise(
+                context, self.session.confirmed_rounds
             )
 
-        focused = self._focus_known_ally(
-            context, self._session.confirmed_rounds
+        focused = self.mapper.focus_known_ally(
+            context, self.session.confirmed_rounds
         )
         if focused is None and (
-            not world.has_allies() or not self._world_has_fresh_targets()
+            not world.has_allies()
+            or not self.strategy.world_has_fresh_targets()
         ):
-            self._explore_world_clockwise(
-                context, self._session.confirmed_rounds
+            self.mapper.explore_world_clockwise(
+                context, self.session.confirmed_rounds
             )
-            focused = self._focus_known_ally(
-                context, self._session.confirmed_rounds
+            focused = self.mapper.focus_known_ally(
+                context, self.session.confirmed_rounds
             )
 
         if focused is None or (
-            not self._world_has_fresh_targets()
-            and self._coarse_threat_direction is None
+            not self.strategy.world_has_fresh_targets()
+            and self.runtime.coarse_threat_direction is None
         ):
-            no_progress = self._session.record_no_progress()
+            no_progress = self.session.record_no_progress()
             logger.warning(
                 "主动阶段完整建图后仍无法同时定位我方和敌人，"
                 f"本回合等待敌人移动后重试 ({no_progress}/"
@@ -401,18 +436,18 @@ class AutoFightProcessor(
             )
 
         round_grid, round_reference = focused
-        round_grid, recentered, recentered_img = self._recenter_edge_allies(
+        round_grid, recentered, recentered_img = self.mapper.recenter_edge_allies(
             context,
             round_grid,
-            self._session.confirmed_rounds,
+            self.session.confirmed_rounds,
         )
         if recentered and recentered_img is not None:
             round_reference = recentered_img
         if not round_grid.enemy_units:
-            refreshed = self._refresh_local_threat_map(
-                context, self._session.confirmed_rounds
+            refreshed = self.mapper.refresh_local_threat_map(
+                context, self.session.confirmed_rounds
             )
-            if not refreshed or not self._threat_overlay_safe:
+            if not refreshed or not self.runtime.threat_overlay_safe:
                 logger.warning(
                     "当前我方视野无法安全刷新威胁层，本回合只结束等待"
                 )
@@ -424,10 +459,10 @@ class AutoFightProcessor(
             normal_img = screencap(context)
             if normal_img is None:
                 return _ActiveRoundResult(ActiveRoundStatus.FAILED)
-            round_grid = self._scan_world_view(
+            round_grid = self.mapper.scan_world_view(
                 context,
                 normal_img,
-                self._session.confirmed_rounds,
+                self.session.confirmed_rounds,
                 overlay_open=False,
             )
             round_reference = normal_img
@@ -436,51 +471,51 @@ class AutoFightProcessor(
         # viewport corner even though no normal red bar is visible.  Pull
         # that world point inward with the matching diagonal nudge before
         # selecting a unit, then rebuild both normal and threat views.
-        _, known_hidden_target, _ = self._world_pursuit(round_grid)
+        _, known_hidden_target, _ = self.strategy.world_pursuit(round_grid)
         if known_hidden_target is not None and not round_grid.enemy_units:
             (
                 round_grid,
                 hidden_recentered,
                 hidden_recentered_img,
-            ) = self._recenter_edge_allies(
+            ) = self.mapper.recenter_edge_allies(
                 context,
                 round_grid,
-                self._session.confirmed_rounds,
+                self.session.confirmed_rounds,
                 known_target=known_hidden_target,
             )
             if hidden_recentered and hidden_recentered_img is not None:
                 round_reference = hidden_recentered_img
                 if not round_grid.enemy_units:
-                    if not self._refresh_local_threat_map(
-                        context, self._session.confirmed_rounds
+                    if not self.mapper.refresh_local_threat_map(
+                        context, self.session.confirmed_rounds
                     ):
                         logger.warning("隐藏敌人格重定位后威胁层刷新失败")
                     normal_img = screencap(context)
                     if normal_img is None:
                         return _ActiveRoundResult(ActiveRoundStatus.FAILED)
-                    round_grid = self._scan_world_view(
+                    round_grid = self.mapper.scan_world_view(
                         context,
                         normal_img,
-                        self._session.confirmed_rounds,
+                        self.session.confirmed_rounds,
                         overlay_open=False,
                     )
                     round_reference = normal_img
 
         if (
-            not self._world_has_fresh_targets()
-            and self._coarse_threat_direction is None
+            not self.strategy.world_has_fresh_targets()
+            and self.runtime.coarse_threat_direction is None
         ):
-            self._explore_world_clockwise(
-                context, self._session.confirmed_rounds
+            self.mapper.explore_world_clockwise(
+                context, self.session.confirmed_rounds
             )
-            focused = self._focus_known_ally(
-                context, self._session.confirmed_rounds
+            focused = self.mapper.focus_known_ally(
+                context, self.session.confirmed_rounds
             )
             if focused is None or (
-                not self._world_has_fresh_targets()
-                and self._coarse_threat_direction is None
+                not self.strategy.world_has_fresh_targets()
+                and self.runtime.coarse_threat_direction is None
             ):
-                no_progress = self._session.record_no_progress()
+                no_progress = self.session.record_no_progress()
                 logger.warning(
                     "局部威胁刷新后敌人位置失效，等待下一回合再探索 "
                     f"({no_progress}/{self.MAX_NO_PROGRESS_CYCLES})"
@@ -496,12 +531,12 @@ class AutoFightProcessor(
             round_grid, round_reference = focused
 
         pursuit_direction, hidden_enemy_cell, environment_mode = (
-            self._world_pursuit(round_grid)
+            self.strategy.world_pursuit(round_grid)
         )
         # 跨回合方向记忆在此刷新：本次规划出的追击方向就是最新的记忆值，
         # 因此下面判空一律用 pursuit_direction，不必再读记忆字段。
-        self._last_known_enemy_direction = pursuit_direction
-        self._last_known_enemy_age = 0
+        self.runtime.last_known_enemy_direction = pursuit_direction
+        self.runtime.last_known_enemy_age = 0
         logger.debug(
             "全局地图规划目标: "
             f"direction={pursuit_direction}, "
@@ -512,7 +547,7 @@ class AutoFightProcessor(
         unsafe_allies = [
             cell
             for cell in round_grid.self_units
-            if not self._ally_is_actionable(cell)
+            if not ally_is_actionable(cell)
         ]
         if unsafe_allies:
             logger.debug(
@@ -523,7 +558,7 @@ class AutoFightProcessor(
         allies = [
             (cell.row, cell.col)
             for cell in round_grid.self_units
-            if self._ally_is_actionable(cell)
+            if ally_is_actionable(cell)
         ]
         logger.debug(
             f"战场识别: {COLS}x{ROWS}, 我方={len(allies)}, "
@@ -592,16 +627,18 @@ class AutoFightProcessor(
                 outcome.result = False
                 return outcome
 
-            battle_result = self._detect_battle_result(context, current_img)
+            battle_result = self.actions.detect_battle_result(
+                context, current_img
+            )
             if battle_result is not None:
                 outcome.result = battle_result
                 return outcome
 
             current_grid = BattleGrid()
-            self.scanner.scan_grid(current_grid, context, current_img)
-            self._merge_world_view(
+            self.classifier.scan_grid(current_grid, context, current_img)
+            self.mapper.merge_world_view(
                 current_grid,
-                self._session.confirmed_rounds,
+                self.session.confirmed_rounds,
                 replace_visible=True,
             )
             action_pursuit = pursuit_direction
@@ -631,9 +668,9 @@ class AutoFightProcessor(
             if (
                 not current_targets
                 and action_pursuit is None
-                and self._last_known_enemy_direction is not None
+                and self.runtime.last_known_enemy_direction is not None
             ):
-                action_pursuit = self._last_known_enemy_direction
+                action_pursuit = self.runtime.last_known_enemy_direction
                 logger.debug(
                     "当前动作帧仍无可见敌人，沿用本回合隐匿/远端方向 "
                     f"{action_pursuit}"
@@ -649,7 +686,7 @@ class AutoFightProcessor(
                     action_pursuit,
                     action_hidden_enemy_cell,
                     environment_mode,
-                ) = self._world_pursuit(current_grid)
+                ) = self.strategy.world_pursuit(current_grid)
                 if action_pursuit is None:
                     logger.debug(
                         "当前角色帧没有可用全局目标，跳过角色；"
@@ -657,7 +694,7 @@ class AutoFightProcessor(
                     )
                     continue
 
-            current_ally = self._nearest_available_ally(
+            current_ally = self.actions.nearest_available_ally(
                 current_grid,
                 planned_row,
                 planned_col,
@@ -674,7 +711,7 @@ class AutoFightProcessor(
                 f"选择角色 {ally_index}: grid=({current_ally.row},{current_ally.col})"
             )
             select_x, select_y = current_ally.safe_click_point()
-            if not self._click_and_log(
+            if not self.actions.click_and_log(
                 context, select_x, select_y, f"选择我方角色 {ally_index}"
             ):
                 logger.error("选择我方角色的控制器点击失败")
@@ -683,14 +720,14 @@ class AutoFightProcessor(
 
             # 选中后左上资料卡会遮住敌人、黄色攻击角标和点击点。
             # 实机确认顶部收起按钮只隐藏卡片，不会取消选中或范围。
-            if not self._dismiss_role_card(context):
+            if not self.actions.dismiss_role_card(context):
                 logger.error("选人后无法收起人物卡片，停止以避免盲目移动")
                 outcome.result = False
                 return outcome
 
             # 4 倍速下覆盖层可能在 0.6 秒等待期间已经变化。短间隔连续取帧，
             # 并让敌人和范围始终来自同一张截图。
-            selected_state = self._capture_selected_state(
+            selected_state = self.actions.capture_selected_state(
                 context, current_targets
             )
             if selected_state is None:
@@ -706,10 +743,10 @@ class AutoFightProcessor(
                     "选人后连续取帧仍未识别到攻击/移动范围；"
                     "本次选择未确认或该单位当前无可用行动"
                 )
-                self._cancel_selection(context)
+                self.actions.cancel_selection(context)
                 continue
 
-            acted, moved_to, action_advanced_round = self._decide_and_act(
+            acted, moved_to, action_advanced_round = self.strategy.decide_and_act(
                 context,
                 selected_grid,
                 selected_ally,
@@ -728,8 +765,8 @@ class AutoFightProcessor(
 
             if not acted:
                 logger.warning("存在动作范围但没有安全合法目标，已取消本次选择")
-                self._cancel_selection(context)
-            elif not action_advanced_round and not self._dismiss_role_card(
+                self.actions.cancel_selection(context)
+            elif not action_advanced_round and not self.actions.dismiss_role_card(
                 context
             ):
                 logger.error("动作完成后无法收起人物卡片，停止后续角色行动")
@@ -767,11 +804,11 @@ class AutoFightProcessor(
                 cell = grid.cells[row][col]
                 if row == ally.row and col == ally.col:
                     base = "A"
-                elif cell.cell_type == CellType.ENEMY:
+                elif cell.kind == CellKind.ENEMY:
                     base = "E"
-                elif cell.cell_type == CellType.FRIEND:
+                elif cell.kind == CellKind.FRIEND:
                     base = "F"
-                elif cell.cell_type == CellType.SELF:
+                elif cell.kind == CellKind.SELF:
                     base = "S"
                 else:
                     base = "0"

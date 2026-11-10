@@ -9,7 +9,7 @@ from utils import logger, progress
 from utils.screen import screencap
 from action.zshg.task_hud_recognizer import TaskHudRecognizer
 
-from .battle_world_map import BattleSessionRegistry, session_key
+from .battle_map import BattleSessionRegistry, session_key
 
 # 地图分层信号：底部出现「前往大陆」= 人在群岛层；出现「前往群岛」或
 # 主城可见 = 人在大陆层。fight_processor 与 pirate_raid_processor 共用，
@@ -741,7 +741,7 @@ def _process_fighting(context: Context) -> bool:
     logger.debug(
         "稳定战斗界面已就绪，接入 AutoFightProcessor: "
         f"new={entered_from_start}, confirmed_rounds={session.confirmed_rounds}, "
-        f"explored={len(session.world.observed)}"
+        f"explored={len(session.map.observed)}"
     )
     auto_result = context.run_task("AutoFight_Start")
 

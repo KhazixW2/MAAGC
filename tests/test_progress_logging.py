@@ -8,8 +8,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
 
 from action.fight import battle_action
-from action.fight.auto_fight_processor import AutoFightProcessor
-from action.fight.battle_world_map import BattleSessionState
+from action.fight.battle_action import BattleActions
+from action.fight.battle_map import BattleSessionState
 from action.fight import fight_processor as fp
 from action.fight import fight_utils as fu
 from utils import logger
@@ -112,27 +112,26 @@ class ConsoleFilterTests(unittest.TestCase):
 
 
 class BattleProgressTests(unittest.TestCase):
-    def make_processor(self, session=None):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
-        processor._session = session or BattleSessionState(key="test")
-        return processor
+    def make_actions(self, session=None):
+        session = session or BattleSessionState(key="test")
+        return BattleActions(session, classifier=None)
 
     def test_round_advance_refreshes_the_progress_line(self):
-        processor = self.make_processor()
+        actions = self.make_actions()
         fake = FakeProgress()
 
         with patch.object(battle_action, "progress", fake):
-            processor._record_round_advance("被动阶段结束回合")
+            actions.record_round_advance("被动阶段结束回合")
 
         self.assertEqual(fake.messages, ["整场战斗 回合 1 · 被动阶段结束回合"])
 
     def test_progress_line_shows_the_latest_action_detail(self):
-        processor = self.make_processor()
+        actions = self.make_actions()
         fake = FakeProgress()
 
         with patch.object(battle_action, "progress", fake):
-            processor._refresh_progress("攻击目标 (3, 5)")
-            processor._refresh_progress()
+            actions.refresh_progress("攻击目标 (3, 5)")
+            actions.refresh_progress()
 
         self.assertEqual(
             fake.messages,
@@ -328,37 +327,38 @@ class BattleResultLogTests(unittest.TestCase):
     def _collect(self, message):
         self.messages.append(message.record["message"])
 
-    def make_processor(self, session=None):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
-        processor._session = session or BattleSessionState(key="test")
-        return processor
+    def make_actions(self, session=None):
+        session = session or BattleSessionState(key="test")
+        return BattleActions(session, classifier=None)
 
     def _victory_logs(self):
         return [m for m in self.messages if "胜利结算页" in m]
 
     def test_victory_is_logged_once_per_battle(self):
-        processor = self.make_processor()
+        actions = self.make_actions()
 
-        processor._report_battle_result(True)
-        processor._report_battle_result(True)
+        actions.report_battle_result(True)
+        actions.report_battle_result(True)
 
         self.assertEqual(len(self._victory_logs()), 1)
 
     def test_failure_is_logged_once_per_battle(self):
-        processor = self.make_processor()
+        actions = self.make_actions()
 
-        processor._report_battle_result(False)
-        processor._report_battle_result(False)
+        actions.report_battle_result(False)
+        actions.report_battle_result(False)
 
         failures = [m for m in self.messages if "失败结算页" in m]
         self.assertEqual(len(failures), 1)
 
     def test_a_new_battle_logs_the_result_again(self):
-        processor = self.make_processor()
-        processor._report_battle_result(True)
+        actions = self.make_actions()
+        actions.report_battle_result(True)
 
-        processor._session = BattleSessionState(key="next-battle")
-        processor._report_battle_result(True)
+        actions = self.make_actions(
+            BattleSessionState(key="next-battle")
+        )
+        actions.report_battle_result(True)
 
         self.assertEqual(len(self._victory_logs()), 2)
 

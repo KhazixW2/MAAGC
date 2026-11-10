@@ -550,3 +550,98 @@ MaaFW 侧只在 `ensure_at_bigmap` 走到「不在大地图」分支时才做事
 | 新增用例在 HEAD 上必须失败 | ✓ `FightFail` 会匹配表白横幅、`Event_ConfessionFail` ROI 包不住横幅，两条断言均失败 |
 | `python check_resource.py assets/resource/base` | ✓ All directories checked |
 | `install-cli` 重新打包 + 自定义动作注册冒烟测试 | ✓ `AutoFightProcessor` 注册成功 |
+
+## 回合推进判定改用 Pipeline OCR 节点（2026-11-10）
+
+> 需求：用 Pipeline 节点识别右下角「回合：N」，数字两次变化即确认回合推进；
+> 顺手精简 `battle_action.py` 原先 50 行、3 个函数的像素差分实现。
+
+### 执行清单
+
+- [x] 1. 复用已有节点 `FightRoundNumber`（OCR），修正 ROI 与 expected
+      - ROI `[570,1135,150,80]` → `[570,1160,150,55]`（旧 ROI 下数字框只有 2/10 帧能检出）
+      - expected `回合\s*[:：]?\s*\d+` → `回合\s*[:：]?\s*\d*`
+- [x] 2. `battle_action.py`：删除 `_track_round_change`（像素差分）与
+      `battle_vision.round_marker_difference`
+- [x] 3. `battle_action.py`：新增 `_read_round_number` / `_watch_round` /
+      `_wait_for_round_change`，合计约 34 行（原来 3 个函数约 50 行 + 17 行视觉工具）
+- [x] 4. 新增 `tests/test_battle_round_number.py`（7 个用例，含「连续两帧同值才确认」）
+
+### 验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| `python -m unittest discover -s tests` | ✓ 78 tests OK（新增 7 个） |
+| `python check_resource.py assets/resource/base` | ✓ All directories checked |
+| 实机 OCR：`FightRoundNumber` 节点 | ✓ 读出 `回合：` + `1`（score 0.997 / 0.994） |
+| 实机回合推进（点一次「结束回合」） | ✓ 基线 3 → 结束回合 → 第 1 帧读到 4（未确认）→ 第 2 帧读到 4（确认推进） |
+
+> 实机验证时点了 3 次「结束回合」把用户那场测试战斗推进到了第 4 回合。
+
+## 战斗模块四层重构（2026-11-10）
+
+> 需求：把 `agent/action/fight/` 的 8 个 Mixin 模块重构成 map / classify / action / strategy 四层；
+> 局部建图与全局建图合并成一个统一地图模型。
+> 设计文档：`docs/superpowers/specs/2026-11-10-battle-module-four-layers-design.md`
+
+### 执行清单
+
+- [x] 1. `battle_map.py`：统一地图模型（`CellKind` / `Cell` / `BattleGrid` /
+      `BattleMap` / `BattleSessionState` / `BattleRuntime`），**不依赖任何战斗模块**
+- [x] 2. `battle_classify.py`：`GridClassifier`（原 `GridScanner`）+ `ThreatClassifier`
+- [x] 3. `battle_action.py`：`BattleActions` + `ActionKind` 收拢全部游戏操作
+- [x] 4. `battle_strategy.py`：`BattleStrategy` / `ActionPlan` / `astar_path` / `choose_move_candidate`
+- [x] 5. `battle_mapping.py`：`BattleMapBuilder` 建图流程（拆出以避免 map → action 循环导入）
+- [x] 6. `battle_geometry.py`：新增 `ally_is_actionable` / `coarse_threat_direction`
+      （建图层与策略层共用的纯函数）
+- [x] 7. `auto_fight_processor.py`：改显式类组合，类名与模块路径不变
+- [x] 8. 删除 `battle_grid.py` / `battle_world_map.py` / `battle_planner.py` /
+      `battle_decision.py` / `battle_camera.py` / `battle_threat.py` / `battle_support.py`
+- [x] 9. 测试迁移：`test_battle_world_map.py` → `test_battle_map.py`，
+      `test_auto_fight_world_scan.py` / `test_battle_round_number.py` / `test_progress_logging.py`
+      改为按层构造对象
+- [x] 10. 同步设计文档与 `docs/zh_cn/developers/custom.md`
+
+### 验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| `python -m py_compile agent/action/fight/*.py tests/*.py` | ✓ COMPILE_OK |
+| `python -m unittest discover -s tests -t tests -p "test_*.py"` | ✓ **79 tests OK**（基线 78，新增 1 条 `fresh_targets` 用例） |
+| `python check_resource.py assets/resource/base` | ✓ All directories checked |
+| 依赖环检查 | ✓ `battle_map` 无内部 import；`map → vision/classify → action → strategy → mapping → processor` 单向无环 |
+
+### 实机验证（阶段 8）
+
+环境：MuMu 模拟器（ADB `127.0.0.1:16448`），MaaMCP 的 ADB controller + agent supervisor
+拉起本仓库 agent（`MAAGC_TEST_ACTIVE_FROM_ROUND=1` 提前进入主动阶段）。
+
+| 项 | 结果 |
+| --- | --- |
+| 完整业务流程 | ✓ 找城（近邻探测命中「雄月城」）→ 接任务（选「世界第一好爸爸」）→ 进入战斗 |
+| classify 层 | ✓ `Battle_UnitScan_Blue/Red/Green` 色块扫描 + 「确认锯齿空洞敌人格」持续输出 |
+| map 层 | ✓ 顺时针全局建图推进 `origin` / `explored`（80→100→155→165），「顺时针建图结束: complete=True, swipes=10, allies=0, enemies=16」 |
+| action 层 | ✓ 「危险覆盖层切换为 开启/关闭 (n/2): click=True」等操作全部执行 |
+| strategy 层 | ✓ 「战斗到达第 1 回合仍未结束，切换为主动搜索与追击模式」「主动阶段完整建图后仍无法同时定位我方和敌人，本回合等待敌人移动后重试 (1/12)」 |
+| 回合数字读取 | ✓ `FightRoundNumber` OCR 读到「回合：3」（score 0.989，box `[585,1165,109,26]`） |
+
+**行为等价性 A/B（关键）**：在同一场战斗中，用 `git worktree` 拉出重构前的
+`HEAD`（旧 Mixin 版 `battle_*`）跑同一入口 `AutoFight_Start`，日志逐行对照：
+
+```text
+旧代码：全局地图缺少我方或敌人，触发威胁层顺时针探索: allies=False, enemies=True
+新代码：全局地图缺少我方或敌人，触发威胁层顺时针探索: allies=False, enemies=True
+```
+
+结论：本场战斗没能取胜（双方都卡在「定位不到我方单位 → 只能结束回合等待」）
+**是重构前就存在的行为**，不是四层拆分引入的回归。
+
+### 遗留
+
+- **本场战斗没能取胜**：全局建图时 `allies=0`（我方单位未被识别为 SELF），
+  策略层因此无法出手，只能结束回合等待，直到 `MAX_NO_PROGRESS_CYCLES`。
+  重构前后行为一致，属于既有缺陷，不在本次重构范围；后续可单独排查
+  「我方单位识别为 SELF」这条链路。
+- **回合数字 OCR 偶发读不到**：一次等待中出现「参考帧未读到回合数字」，
+  另一次正常读到。读取逻辑要求同时命中「含『回合』的文本框」和「数字框」，
+  画面动画期间可能两者都没检出。

@@ -1,47 +1,72 @@
+import sys
 import unittest
+from pathlib import Path
 
-from agent.action.fight.battle_world_map import (
-    ENEMY,
-    SELF,
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT))
+sys.path.insert(0, str(_ROOT / "agent"))
+
+from action.fight.battle_map import (
+    BattleGrid,
+    BattleMap,
     BattleSessionRegistry,
-    BattleWorldMap,
+    CellKind,
     ClockwiseExplorer,
-    astar_path,
-    choose_move_candidate,
 )
+from action.fight.battle_strategy import astar_path, choose_move_candidate
 
 
-class BattleWorldMapTests(unittest.TestCase):
+def make_grid(
+    *,
+    self_units=(),
+    enemies=(),
+    friends=(),
+    environment=(),
+) -> BattleGrid:
+    """构造一张只包含指定单位类型的局部网格。"""
+    grid = BattleGrid()
+    for row, col in self_units:
+        grid.cells[row][col].kind = CellKind.SELF
+    for row, col in enemies:
+        grid.cells[row][col].kind = CellKind.ENEMY
+    for row, col in friends:
+        grid.cells[row][col].kind = CellKind.FRIEND
+    for row, col in environment:
+        grid.cells[row][col].kind = CellKind.ENVIRONMENT
+    return grid
+
+
+class BattleMapTests(unittest.TestCase):
     def tearDown(self) -> None:
         BattleSessionRegistry.clear()
 
     def test_camera_motion_translates_local_cells_to_world(self) -> None:
-        world = BattleWorldMap()
-        world.merge_view(0, allies=[(4, 2)])
-        self.assertIn((4, 2), world.units[SELF])
+        world = BattleMap()
+        world.merge_view(make_grid(self_units=[(4, 2)]), 0)
+        self.assertIn((4, 2), world.units[CellKind.SELF])
 
         # A pan toward map-right makes the background move 480 pixels left.
         delta = world.apply_camera_motion(-480.0, 0.0)
         self.assertEqual((0, 4), delta)
-        world.merge_view(0, enemies=[(3, 1)])
-        self.assertIn((3, 5), world.units[ENEMY])
+        world.merge_view(make_grid(enemies=[(3, 1)]), 0)
+        self.assertIn((3, 5), world.units[CellKind.ENEMY])
 
     def test_threat_observation_survives_normal_red_bar_refresh(self) -> None:
-        world = BattleWorldMap()
+        world = BattleMap()
         world.merge_threat_cells([(2, 2)], round_seen=1)
-        world.merge_view(2, enemies=[], replace_visible=True)
-        self.assertIn((2, 2), world.units[ENEMY])
+        world.merge_view(make_grid(), 2)
+        self.assertIn((2, 2), world.units[CellKind.ENEMY])
 
     def test_empty_threat_refresh_removes_visible_threat_point(self) -> None:
-        world = BattleWorldMap()
+        world = BattleMap()
         world.merge_threat_cells([(2, 2)], round_seen=1)
 
         world.merge_threat_cells([], round_seen=2)
 
-        self.assertNotIn((2, 2), world.units[ENEMY])
+        self.assertNotIn((2, 2), world.units[CellKind.ENEMY])
 
     def test_empty_same_round_threat_refresh_keeps_confirmed_point(self) -> None:
-        world = BattleWorldMap()
+        world = BattleMap()
         world.merge_threat_cells([(2, 2)], round_seen=3)
 
         # A later overlapping viewport in the same player turn can clip the
@@ -49,20 +74,36 @@ class BattleWorldMapTests(unittest.TestCase):
         # threat cell must remain available to A* pursuit.
         world.merge_threat_cells([], round_seen=3)
 
-        self.assertIn((2, 2), world.units[ENEMY])
+        self.assertIn((2, 2), world.units[CellKind.ENEMY])
 
     def test_visible_status_bar_observation_is_replaced(self) -> None:
-        world = BattleWorldMap()
-        world.merge_view(1, enemies=[(2, 2)])
-        world.merge_view(2, enemies=[])
-        self.assertNotIn((2, 2), world.units[ENEMY])
+        world = BattleMap()
+        world.merge_view(make_grid(enemies=[(2, 2)]), 1)
+        world.merge_view(make_grid(), 2)
+        self.assertNotIn((2, 2), world.units[CellKind.ENEMY])
 
     def test_visible_predicted_ally_is_replaced_by_normal_scan(self) -> None:
-        world = BattleWorldMap()
-        world.merge_view(1, allies=[(2, 2)])
+        world = BattleMap()
+        world.merge_view(make_grid(self_units=[(2, 2)]), 1)
         world.record_predicted_move((2, 2), (2, 4), round_seen=1)
-        world.merge_view(2, allies=[])
-        self.assertNotIn((2, 4), world.units[SELF])
+        world.merge_view(make_grid(), 2)
+        self.assertNotIn((2, 4), world.units[CellKind.SELF])
+
+    def test_fresh_targets_expire_enemies_but_keep_environment(self) -> None:
+        world = BattleMap()
+        world.merge_view(
+            make_grid(enemies=[(1, 1)], environment=[(2, 2)]), 3
+        )
+
+        enemies, environment = world.fresh_targets(3)
+
+        self.assertEqual([(1, 1)], enemies)
+        self.assertEqual([(2, 2)], environment)
+
+        # 敌人每回合都可能移动，旧坐标不能继续当终点；环境目标是静态的。
+        later_enemies, later_environment = world.fresh_targets(4)
+        self.assertEqual([], later_enemies)
+        self.assertEqual([(2, 2)], later_environment)
 
     def test_session_survives_reentry_and_resets_for_new_battle(self) -> None:
         first = BattleSessionRegistry.begin("controller")

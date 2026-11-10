@@ -400,12 +400,12 @@
     },
     "FightRoundNumber": {
         "recognition": "OCR",
-        "expected": "回合\\s*[:：]?\\s*\\d+",
+        "expected": "回合\\s*[:：]?\\s*\\d*",
         "roi": [
             570,
-            1135,
+            1160,
             150,
-            80
+            55
         ],
         "rate_limit": 0,
         "pre_delay": 0,

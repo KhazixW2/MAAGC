@@ -1,33 +1,38 @@
-"""Persistent battle-map state and eight-direction path planning.
+"""战场地图层：局部视野网格与全局累积地图的统一模型。
 
-The game exposes only a 6 x 10 viewport.  ``BattleWorldMap`` translates that
-viewport into battle-global grid coordinates by accumulating verified camera
-motion.  Dynamic unit observations deliberately keep their last known position
-outside the current viewport: enemies are allowed to move between turns, but a
-stale direction is still more useful than throwing the map away and searching
-from scratch on every ``AutoFightProcessor`` invocation.
+地图层只回答“战场现在是什么样”，不读像素、不点击：
 
-This module has no MaaFramework dependency so the mapping and planning rules can
-be tested without connecting to the game.
+- :class:`CellKind` / :class:`Cell` / :class:`BattleGrid`
+  当前 6x10 视野的局部网格（格子归一、点击坐标、可攻击/可移动标记）。
+- :class:`BattleMap`
+  局部网格与全局累积坐标的**统一模型**，负责两套坐标系的换算、
+  单位观测的合并与老化。
+- :class:`BattleSessionState` / :class:`BattleSessionRegistry`
+  跨 ``CustomAction`` 调用存活的会话状态。
+
+本模块不依赖 MaaFramework，地图规则可以脱离游戏单测。
 """
 
 from __future__ import annotations
 
-import heapq
-import itertools
 import time
 from dataclasses import dataclass, field
-from math import inf
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from enum import Enum
+from itertools import chain
+from typing import Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
+
+# ========================
+# 局部网格常量
+# ========================
+
+ROWS: int = 10
+COLS: int = 6
+CELL_WIDTH: int = 120
+CELL_HEIGHT: int = 120
 
 GridPoint = Tuple[int, int]
 Direction = Tuple[int, int]
-
-SELF = "self"
-ENEMY = "enemy"
-FRIEND = "friend"
-ENVIRONMENT = "environment"
 
 CARDINAL_CLOCKWISE: Tuple[Direction, ...] = (
     (0, 1),   # camera right
@@ -47,13 +52,131 @@ EIGHT_DIRECTIONS: Tuple[Direction, ...] = (
     (-1, -1),
 )
 
+# 目标观测的有效期：敌人每回合都可能移动，旧坐标不能继续当终点；
+# 环境目标是静态的，允许短暂遮挡后仍然有效。
+ENEMY_OBSERVATION_MAX_AGE = 0
+ENVIRONMENT_OBSERVATION_MAX_AGE = 2
+
+
+class CellKind(Enum):
+    """格子里是什么。
+
+    角色（我方 / 敌方 / 友军）与场地（祭坛、石碑等静态目标）共用一套
+    词汇，避免“枚举 + 布尔”双写导致的分类分裂。
+    """
+
+    EMPTY = "empty"
+    SELF = "self"
+    ENEMY = "enemy"
+    FRIEND = "friend"
+    ENVIRONMENT = "environment"
+
+
+@dataclass
+class Cell:
+    """局部网格中的一格。"""
+
+    row: int
+    col: int
+    kind: CellKind = CellKind.EMPTY
+    unit_center: Tuple[int, int] = (0, 0)
+    target_center: Tuple[int, int] = (0, 0)
+    move_center: Tuple[int, int] = (0, 0)
+    attack_center: Tuple[int, int] = (0, 0)
+    is_moveable: bool = False
+    is_attackable: bool = False
+
+    def safe_click_point(self) -> Tuple[int, int]:
+        """单位优先点击当前截图中的实际状态条中心。"""
+        if self.unit_center != (0, 0):
+            return self.unit_center
+        return (
+            self.col * CELL_WIDTH + CELL_WIDTH // 2,
+            self.row * CELL_HEIGHT + CELL_HEIGHT // 2,
+        )
+
+    def action_click_point(self, action: str) -> Tuple[int, int]:
+        """返回当前截图中与动作对应的实际范围中心。"""
+        if action == "move" and self.move_center != (0, 0):
+            # 战斗格会随镜头平移，视觉中心实测位于 120/240/360...；
+            # 不能用静态格心 60/180/300... 替代当前范围框中心。
+            return self.move_center
+        if action == "attack":
+            # 第一次点目标框生成攻击预览，第二次同点确认。点状态条只会
+            # 打开敌人资料面板，因此必须优先使用角标聚合出的目标框中心。
+            if self.attack_center != (0, 0):
+                return self.attack_center
+            if self.target_center != (0, 0):
+                return self.target_center
+            if self.unit_center != (0, 0):
+                return self.unit_center
+        return self.safe_click_point()
+
+
+class BattleGrid:
+    """当前视野的局部网格：只包含数据结构，提供格子访问接口。"""
+
+    def __init__(self) -> None:
+        self.cells = [[Cell(r, c) for c in range(COLS)] for r in range(ROWS)]
+
+    def __iter__(self) -> Iterator[Cell]:
+        return chain.from_iterable(self.cells)
+
+    def _of_kind(self, kind: CellKind) -> List[Cell]:
+        return [cell for cell in self if cell.kind == kind]
+
+    @property
+    def self_units(self) -> List[Cell]:
+        return self._of_kind(CellKind.SELF)
+
+    @property
+    def enemy_units(self) -> List[Cell]:
+        return self._of_kind(CellKind.ENEMY)
+
+    @property
+    def environment_units(self) -> List[Cell]:
+        return self._of_kind(CellKind.ENVIRONMENT)
+
+    @property
+    def friend_units(self) -> List[Cell]:
+        return self._of_kind(CellKind.FRIEND)
+
+    def reset_flags(self) -> None:
+        """重置所有格子的移动/攻击标记。"""
+        for cell in self:
+            cell.is_moveable = False
+            cell.is_attackable = False
+            cell.move_center = (0, 0)
+            cell.attack_center = (0, 0)
+
+    def reset(self) -> None:
+        """清空全部动态状态，保证每张截图不会继承幽灵单位。"""
+        for cell in self:
+            cell.kind = CellKind.EMPTY
+            cell.unit_center = (0, 0)
+            cell.target_center = (0, 0)
+            cell.move_center = (0, 0)
+            cell.attack_center = (0, 0)
+            cell.is_moveable = False
+            cell.is_attackable = False
+
+    def get_cell(self, row: int, col: int) -> Optional[Cell]:
+        if 0 <= row < ROWS and 0 <= col < COLS:
+            return self.cells[row][col]
+        return None
+
+
+# ========================
+# 全局地图
+# ========================
+
 
 @dataclass
 class UnitObservation:
     """Last known dynamic-unit observation in battle-global coordinates."""
 
     point: GridPoint
-    kind: str
+    kind: CellKind
     round_seen: int
     source: str
     confidence: float = 1.0
@@ -61,28 +184,38 @@ class UnitObservation:
 
 
 @dataclass
-class BattleWorldMap:
-    """Persistent world model assembled from successive 6 x 10 viewports."""
+class BattleMap:
+    """局部视野与全局累积坐标的统一地图。
 
-    rows: int = 10
-    cols: int = 6
-    cell_width: int = 120
-    cell_height: int = 120
+    ``grid`` 是当前这一帧的 6x10 视野；``units`` / ``observed`` 是把
+    历次视野累积到全局坐标后的结果。所有对外查询都返回全局坐标，
+    局部 ``row/col`` 只在 ``to_world`` / ``to_local`` 的边界上出现。
+    """
+
+    rows: int = ROWS
+    cols: int = COLS
+    cell_width: int = CELL_WIDTH
+    cell_height: int = CELL_HEIGHT
+    grid: BattleGrid = field(default_factory=BattleGrid)
     _camera_row_cells: float = 0.0
     _camera_col_cells: float = 0.0
     observed: Dict[GridPoint, int] = field(default_factory=dict)
     walkable: Set[GridPoint] = field(default_factory=set)
     blocked: Set[GridPoint] = field(default_factory=set)
-    units: Dict[str, Dict[GridPoint, UnitObservation]] = field(
+    units: Dict[CellKind, Dict[GridPoint, UnitObservation]] = field(
         default_factory=lambda: {
-            SELF: {},
-            ENEMY: {},
-            FRIEND: {},
-            ENVIRONMENT: {},
+            CellKind.SELF: {},
+            CellKind.ENEMY: {},
+            CellKind.FRIEND: {},
+            CellKind.ENVIRONMENT: {},
         }
     )
     boundaries: Dict[Direction, GridPoint] = field(default_factory=dict)
     successful_pans: int = 0
+
+    # ----------------
+    # 坐标系
+    # ----------------
 
     @property
     def camera_origin(self) -> GridPoint:
@@ -94,6 +227,9 @@ class BattleWorldMap:
     def local_to_world(self, row: int, col: int) -> GridPoint:
         origin_row, origin_col = self.camera_origin
         return origin_row + row, origin_col + col
+
+    def cell_to_world(self, cell: Cell) -> GridPoint:
+        return self.local_to_world(cell.row, cell.col)
 
     def world_to_local(self, point: GridPoint) -> Optional[GridPoint]:
         origin_row, origin_col = self.camera_origin
@@ -135,9 +271,13 @@ class BattleWorldMap:
         for point in self.visible_points():
             self.observed[point] = round_seen
 
+    # ----------------
+    # 观测合并
+    # ----------------
+
     def merge_units(
         self,
-        kind: str,
+        kind: CellKind,
         local_points: Iterable[GridPoint],
         round_seen: int,
         source: str,
@@ -176,48 +316,48 @@ class BattleWorldMap:
 
     def merge_view(
         self,
+        grid: BattleGrid,
         round_seen: int,
         *,
-        allies: Iterable[GridPoint] = (),
-        enemies: Iterable[GridPoint] = (),
-        friends: Iterable[GridPoint] = (),
-        environment: Iterable[GridPoint] = (),
         replace_visible: bool = True,
     ) -> None:
+        """把一张局部网格并入全局地图。"""
+
+        self.grid = grid
         self.mark_view_observed(round_seen)
         if replace_visible:
             visible = self.visible_points()
             # A normal frame is authoritative for allies in its viewport,
             # including positions that were only predicted after a move.
-            for kind in (SELF, FRIEND, ENVIRONMENT):
+            for kind in (CellKind.SELF, CellKind.FRIEND, CellKind.ENVIRONMENT):
                 store = self.units.setdefault(kind, {})
                 for point in list(store):
                     if point in visible:
                         del store[point]
         self.merge_units(
-            SELF,
-            allies,
+            CellKind.SELF,
+            [(cell.row, cell.col) for cell in grid.self_units],
             round_seen,
             "status_bar",
             replace_visible_source=False,
         )
         self.merge_units(
-            ENEMY,
-            enemies,
+            CellKind.ENEMY,
+            [(cell.row, cell.col) for cell in grid.enemy_units],
             round_seen,
             "status_bar",
             replace_visible_source=replace_visible,
         )
         self.merge_units(
-            FRIEND,
-            friends,
+            CellKind.FRIEND,
+            [(cell.row, cell.col) for cell in grid.friend_units],
             round_seen,
             "status_bar",
             replace_visible_source=False,
         )
         self.merge_units(
-            ENVIRONMENT,
-            environment,
+            CellKind.ENVIRONMENT,
+            [(cell.row, cell.col) for cell in grid.environment_units],
             round_seen,
             "status_bar",
             replace_visible_source=False,
@@ -235,7 +375,7 @@ class BattleWorldMap:
         # frame erase a threat cell that was already confirmed.  Once the game
         # advances to a new round the old visible threat cells are stale and
         # may be replaced normally.
-        store = self.units.setdefault(ENEMY, {})
+        store = self.units.setdefault(CellKind.ENEMY, {})
         visible = self.visible_points()
         for point, observation in list(store.items()):
             if (
@@ -245,7 +385,7 @@ class BattleWorldMap:
             ):
                 del store[point]
         return self.merge_units(
-            ENEMY,
+            CellKind.ENEMY,
             local_points,
             round_seen,
             "threat",
@@ -255,7 +395,7 @@ class BattleWorldMap:
 
     def unit_points(
         self,
-        kind: str,
+        kind: CellKind,
         current_round: Optional[int] = None,
         max_age: Optional[int] = None,
     ) -> List[GridPoint]:
@@ -279,20 +419,47 @@ class BattleWorldMap:
         ]
 
     def has_allies(self) -> bool:
-        return bool(self.units.get(SELF))
+        return bool(self.units.get(CellKind.SELF))
 
     def has_enemies(self) -> bool:
-        return bool(self.units.get(ENEMY) or self.units.get(ENVIRONMENT))
+        return bool(
+            self.units.get(CellKind.ENEMY)
+            or self.units.get(CellKind.ENVIRONMENT)
+        )
+
+    def fresh_targets(
+        self, current_round: int
+    ) -> Tuple[List[GridPoint], List[GridPoint]]:
+        """返回本回合仍可作为目标的敌人点与环境目标点。
+
+        敌人每回合都能移动，旧坐标最多只能当方向提示，不能继续当 A* 终点；
+        环境目标（祭坛 / 石碑）是静态的，允许短暂遮挡后仍然有效。
+        """
+        enemies = self.unit_points(
+            CellKind.ENEMY,
+            current_round=current_round,
+            max_age=ENEMY_OBSERVATION_MAX_AGE,
+        )
+        environment = self.unit_points(
+            CellKind.ENVIRONMENT,
+            current_round=current_round,
+            max_age=ENVIRONMENT_OBSERVATION_MAX_AGE,
+        )
+        return enemies, environment
+
+    def has_fresh_targets(self, current_round: int) -> bool:
+        enemies, environment = self.fresh_targets(current_round)
+        return bool(enemies or environment)
 
     def record_predicted_move(
         self, origin: GridPoint, target: GridPoint, round_seen: int
     ) -> None:
-        store = self.units.setdefault(SELF, {})
+        store = self.units.setdefault(CellKind.SELF, {})
         observation = store.pop(origin, None)
         confidence = observation.confidence if observation is not None else 0.75
         store[target] = UnitObservation(
             point=target,
-            kind=SELF,
+            kind=CellKind.SELF,
             round_seen=round_seen,
             source="predicted_move",
             confidence=confidence,
@@ -307,7 +474,11 @@ class BattleWorldMap:
         enemy_max_age: int = 12,
         ally_max_age: int = 4,
     ) -> None:
-        limits = {SELF: ally_max_age, ENEMY: enemy_max_age, FRIEND: ally_max_age}
+        limits = {
+            CellKind.SELF: ally_max_age,
+            CellKind.ENEMY: enemy_max_age,
+            CellKind.FRIEND: ally_max_age,
+        }
         for kind, max_age in limits.items():
             store = self.units.get(kind, {})
             for point, observation in list(store.items()):
@@ -348,6 +519,27 @@ class ClockwiseExplorer:
 
 
 @dataclass
+class BattleRuntime:
+    """跨层共享的运行时标志位。
+
+    这些字段会被建图层写、被策略层读，放在一起避免它们散落成多个
+    模块各自的隐藏状态。它们都是**单次 run 调用**内有效的；
+    跨调用存活的只有 :class:`BattleSessionState`。
+    """
+
+    #: 威胁层给出的粗粒度八方向（只有方向，绝不是敌人坐标）。
+    coarse_threat_direction: Optional[Direction] = None
+    #: 上一回合确认过的移动方向，用于避免立刻掉头。
+    last_confirmed_move_direction: Optional[Direction] = None
+    #: 危险覆盖层当前是否可信（关闭失败会污染红条识别）。
+    threat_overlay_safe: bool = True
+    #: 跨回合敌人方向记忆：上次成功搜索到的敌人相对原点的螺旋方向。
+    last_known_enemy_direction: Optional[Direction] = None
+    #: 自上次成功记录方向以来经过的回合数。
+    last_known_enemy_age: int = 0
+
+
+@dataclass
 class BattleSessionState:
     """Mutable state that survives repeated AutoFight CustomAction calls."""
 
@@ -362,7 +554,7 @@ class BattleSessionState:
     # 结算提示只打一次；新的一场战斗会新建 session，自然重新允许打印。
     reported_result: Optional[bool] = None
     recent_move_points: List[GridPoint] = field(default_factory=list)
-    world: BattleWorldMap = field(default_factory=BattleWorldMap)
+    map: BattleMap = field(default_factory=BattleMap)
     explorer: ClockwiseExplorer = field(default_factory=ClockwiseExplorer)
 
     def active(self, passive_rounds: int = 20) -> bool:
@@ -370,7 +562,7 @@ class BattleSessionState:
 
     def record_round_advance(self) -> None:
         self.confirmed_rounds += 1
-        self.world.decay_dynamic_units(self.confirmed_rounds)
+        self.map.decay_dynamic_units(self.confirmed_rounds)
 
     def record_progress(self) -> None:
         self.no_progress_cycles = 0
@@ -414,179 +606,6 @@ class BattleSessionRegistry:
     @classmethod
     def clear(cls) -> None:
         cls._sessions.clear()
-
-
-def octile_distance(first: GridPoint, second: GridPoint) -> int:
-    delta_row = abs(first[0] - second[0])
-    delta_col = abs(first[1] - second[1])
-    diagonal = min(delta_row, delta_col)
-    straight = max(delta_row, delta_col) - diagonal
-    return diagonal * 14 + straight * 10
-
-
-def _attack_ring(targets: Iterable[GridPoint], blocked: Set[GridPoint]) -> Set[GridPoint]:
-    goals: Set[GridPoint] = set()
-    target_set = set(targets)
-    for row, col in target_set:
-        for row_delta, col_delta in EIGHT_DIRECTIONS:
-            point = row + row_delta, col + col_delta
-            if point not in blocked and point not in target_set:
-                goals.add(point)
-    return goals
-
-
-def astar_path(
-    start: GridPoint,
-    goals: Iterable[GridPoint],
-    *,
-    blocked: Iterable[GridPoint] = (),
-    explored: Iterable[GridPoint] = (),
-    unknown_penalty: int = 6,
-    max_expansions: int = 20000,
-) -> List[GridPoint]:
-    """Return an eight-direction path from ``start`` to any goal."""
-
-    goal_set = set(goals)
-    if not goal_set:
-        return []
-    if start in goal_set:
-        return [start]
-
-    blocked_set = set(blocked)
-    explored_set = set(explored)
-    relevant = goal_set | explored_set | {start}
-    min_row = min(point[0] for point in relevant) - 8
-    max_row = max(point[0] for point in relevant) + 8
-    min_col = min(point[1] for point in relevant) - 8
-    max_col = max(point[1] for point in relevant) + 8
-
-    def heuristic(point: GridPoint) -> int:
-        return min(octile_distance(point, goal) for goal in goal_set)
-
-    queue: List[Tuple[int, int, int, GridPoint]] = []
-    counter = itertools.count()
-    heapq.heappush(queue, (heuristic(start), 0, next(counter), start))
-    came_from: Dict[GridPoint, GridPoint] = {}
-    cost_so_far: Dict[GridPoint, int] = {start: 0}
-    expansions = 0
-
-    while queue and expansions < max_expansions:
-        _, current_cost, _, current = heapq.heappop(queue)
-        if current_cost != cost_so_far.get(current):
-            continue
-        if current in goal_set:
-            path = [current]
-            while current in came_from:
-                current = came_from[current]
-                path.append(current)
-            path.reverse()
-            return path
-
-        expansions += 1
-        for row_delta, col_delta in EIGHT_DIRECTIONS:
-            neighbor = current[0] + row_delta, current[1] + col_delta
-            if not (
-                min_row <= neighbor[0] <= max_row
-                and min_col <= neighbor[1] <= max_col
-            ):
-                continue
-            if neighbor in blocked_set:
-                continue
-            if row_delta and col_delta:
-                side_a = current[0] + row_delta, current[1]
-                side_b = current[0], current[1] + col_delta
-                if side_a in blocked_set and side_b in blocked_set:
-                    continue
-
-            step_cost = 14 if row_delta and col_delta else 10
-            if neighbor not in explored_set:
-                step_cost += max(0, unknown_penalty)
-            new_cost = current_cost + step_cost
-            if new_cost >= cost_so_far.get(neighbor, inf):
-                continue
-            cost_so_far[neighbor] = new_cost
-            came_from[neighbor] = current
-            heapq.heappush(
-                queue,
-                (new_cost + heuristic(neighbor), new_cost, next(counter), neighbor),
-            )
-    return []
-
-
-def choose_move_candidate(
-    start: GridPoint,
-    candidates: Sequence[GridPoint],
-    targets: Sequence[GridPoint],
-    *,
-    blocked: Iterable[GridPoint] = (),
-    explored: Iterable[GridPoint] = (),
-    last_direction: Optional[Direction] = None,
-    recent_positions: Iterable[GridPoint] = (),
-) -> Optional[GridPoint]:
-    """Choose a reachable cell that makes strict progress toward one target.
-
-    Returning ``None`` while ``start`` is already in the attack ring is
-    intentional.  Moving to another ring cell would make the unit orbit an
-    enemy when the real problem is a clipped attack marker or an unstable
-    selected-state frame.
-    """
-
-    if not candidates or not targets:
-        return None
-    blocked_set = set(blocked)
-    explored_set = set(explored)
-    goals = _attack_ring(targets, blocked_set)
-    if not goals:
-        goals = set(targets)
-    if start in goals:
-        return None
-
-    def path_cost(path: Sequence[GridPoint]) -> float:
-        if not path:
-            return inf
-        return sum(
-            (14 if a[0] != b[0] and a[1] != b[1] else 10)
-            + (0 if b in explored_set else 6)
-            for a, b in zip(path, path[1:])
-        )
-
-    start_path = astar_path(
-        start,
-        goals,
-        blocked=blocked_set,
-        explored=explored_set,
-    )
-    start_route_cost = path_cost(start_path)
-    recent_set = set(recent_positions)
-
-    best: Optional[Tuple[float, int, int, GridPoint]] = None
-    for candidate in candidates:
-        path = astar_path(
-            candidate,
-            goals,
-            blocked=blocked_set,
-            explored=explored_set,
-        )
-        route_cost = path_cost(path)
-        if route_cost == inf:
-            continue
-        if start_route_cost != inf and route_cost >= start_route_cost:
-            continue
-        row_direction = 0 if candidate[0] == start[0] else (1 if candidate[0] > start[0] else -1)
-        col_direction = 0 if candidate[1] == start[1] else (1 if candidate[1] > start[1] else -1)
-        backtrack_penalty = 0
-        if last_direction is not None:
-            dot = row_direction * last_direction[0] + col_direction * last_direction[1]
-            if dot < 0:
-                # Backtracking remains legal; it is only less desirable.
-                backtrack_penalty = 20
-        progress_tiebreak = min(octile_distance(candidate, target) for target in targets)
-        revisit_penalty = 80 if candidate in recent_set else 0
-        score = route_cost + backtrack_penalty + revisit_penalty
-        choice = score, revisit_penalty, progress_tiebreak, candidate
-        if best is None or choice < best:
-            best = choice
-    return best[3] if best is not None else None
 
 
 def session_key(context: object) -> str:

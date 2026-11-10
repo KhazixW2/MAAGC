@@ -3,6 +3,7 @@ import unittest
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -11,13 +12,23 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
 
 from action.fight import battle_vision
-from action.fight.auto_fight_processor import AutoFightProcessor
+from action.fight.battle_action import ActionKind, BattleActions
+from action.fight.battle_classify import GridClassifier, ThreatClassifier
 from action.fight.battle_geometry import is_adjacent_cell
-from action.fight.battle_grid import BattleGrid, Cell, CellType
-from action.fight.battle_world_map import BattleSessionState
+from action.fight.battle_map import (
+    BattleGrid,
+    BattleRuntime,
+    BattleSessionState,
+    Cell,
+    CellKind,
+)
+from action.fight.battle_mapping import BattleMapBuilder
+from action.fight.battle_strategy import BattleStrategy
 
 
-class RecordingScanner:
+class RecordingClassifier:
+    """只记录 ``scan_grid`` 收到的格子类型，不做真实识别。"""
+
     def __init__(self) -> None:
         self.cell_types = "not-called"
 
@@ -25,54 +36,91 @@ class RecordingScanner:
         self.cell_types = cell_types
         return img
 
+    def scan_ranges(self, grid, context, img=None):
+        return img
+
+
+class FakeActions:
+    """动作层的最小替身：所有操作都成功。"""
+
+    def __init__(self) -> None:
+        self.pan_calls = []
+        self.overlay_enabled = False
+
+    def pan_camera(self, context, direction, fine=False) -> bool:
+        self.pan_calls.append((direction, fine))
+        return True
+
+    def set_threat_overlay(self, context, enabled: bool) -> bool:
+        self.overlay_enabled = enabled
+        return True
+
+    def wait_for_scene_settle(self, context, timeout: float) -> bool:
+        return True
+
+    def cancel_selection(self, context) -> bool:
+        return True
+
+    def dismiss_role_card(self, context) -> bool:
+        return True
+
+    def click_and_log(self, context, x, y, label) -> bool:
+        return True
+
+
+def make_mapper(session=None, classifier=None, threat_classifier=None):
+    session = session or BattleSessionState(key="test")
+    classifier = classifier or RecordingClassifier()
+    return BattleMapBuilder(
+        session,
+        classifier,
+        threat_classifier or ThreatClassifier(),
+        FakeActions(),
+        BattleRuntime(),
+    )
+
 
 class WorldViewScanTests(unittest.TestCase):
-    def make_processor(self):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
-        processor.scanner = RecordingScanner()
-        processor._session = BattleSessionState(key="test")
-        processor._coarse_threat_direction = None
-        processor._merge_open_threat_overlay = lambda *args: []
-        return processor
+    def make_mapper(self):
+        self.classifier = RecordingClassifier()
+        self.mapper = make_mapper(classifier=self.classifier)
+        self.mapper.merge_open_threat_overlay = lambda *args: []
+        return self.mapper
 
     def test_threat_overlay_does_not_run_red_enemy_scan(self):
-        processor = self.make_processor()
+        mapper = self.make_mapper()
 
-        processor._scan_world_view(
-            object(), object(), 1, overlay_open=True
-        )
+        mapper.scan_world_view(object(), object(), 1, overlay_open=True)
 
         self.assertEqual(
-            set(processor.scanner.cell_types),
-            {CellType.SELF, CellType.FRIEND},
+            set(self.classifier.cell_types),
+            {CellKind.SELF, CellKind.FRIEND},
         )
 
     def test_normal_view_scans_all_unit_colours(self):
-        processor = self.make_processor()
+        mapper = self.make_mapper()
 
-        processor._scan_world_view(
-            object(), object(), 1, overlay_open=False
-        )
+        mapper.scan_world_view(object(), object(), 1, overlay_open=False)
 
-        self.assertIsNone(processor.scanner.cell_types)
+        self.assertIsNone(self.classifier.cell_types)
 
     def test_unit_marker_churn_does_not_reset_no_progress_watchdog(self):
-        processor = self.make_processor()
-        processor._session.no_progress_cycles = 5
+        mapper = self.make_mapper()
+        session = mapper.session
+        session.no_progress_cycles = 5
         frames = iter((object(), object()))
-        processor._pan_camera = lambda *_args, **_kwargs: True
 
-        def scan_with_transient_enemy(_context, _img, round_seen, **_kwargs):
-            processor._session.world.merge_threat_cells(
-                [(2, 2)], round_seen=round_seen
-            )
+        def scan_with_transient_enemy(
+            _context, _img, round_seen, **_kwargs
+        ):
+            session.map.merge_threat_cells([(2, 2)], round_seen=round_seen)
             return BattleGrid()
 
-        processor._scan_world_view = scan_with_transient_enemy
+        mapper.scan_world_view = scan_with_transient_enemy
 
         with (
             patch(
-                "action.fight.battle_camera.screencap",
+                "action.fight.battle_mapping.screencap",
                 side_effect=lambda _context: next(frames),
             ),
             patch(
@@ -84,31 +132,39 @@ class WorldViewScanTests(unittest.TestCase):
                 return_value=True,
             ),
         ):
-            result = processor._pan_world_once(
+            result = mapper.pan_world_once(
                 object(), (0, 1), 3, overlay_open=True, phase="test"
             )
 
         self.assertIsNotNone(result)
-        self.assertEqual(5, processor._session.no_progress_cycles)
+        self.assertEqual(5, session.no_progress_cycles)
 
 
 class ThreatCellTests(unittest.TestCase):
-    def make_processor(self):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
-        processor._session = BattleSessionState(key="threat-test")
-        processor._coarse_threat_direction = None
-        return processor
+    def make_mapper(self):
+        self.threat_classifier = SimpleNamespace(
+            hidden_enemy_cell=lambda *_args: None,
+            threat_origin=lambda *_args: None,
+            visible_regions=lambda *_args: [],
+            largest_region_key=ThreatClassifier.largest_region_key,
+        )
+        self.mapper = make_mapper(
+            session=BattleSessionState(key="threat-test"),
+            threat_classifier=self.threat_classifier,
+        )
+        return self.mapper
 
     @staticmethod
     def make_grid_with_ally() -> BattleGrid:
         grid = BattleGrid()
         ally = grid.get_cell(5, 1)
-        ally.cell_type = CellType.SELF
+        ally.kind = CellKind.SELF
         ally.unit_center = (180, 660)
         return grid
 
     def test_region_or_continuous_origin_is_direction_only(self):
-        processor = self.make_processor()
+        mapper = self.make_mapper()
+        self.threat_classifier.threat_origin = lambda *_args: (600, 180, 0.8)
         context = SimpleNamespace(
             run_recognition=lambda *_: SimpleNamespace(
                 hit=True,
@@ -116,47 +172,37 @@ class ThreatCellTests(unittest.TestCase):
             )
         )
 
-        with (
-            patch(
-                "action.fight.battle_vision.threat_enemy_cell_from_mask",
-                return_value=None,
-            ),
-            patch(
-                "action.fight.battle_vision.threat_origin_from_mask",
-                return_value=(600, 180, 0.8),
-            ),
-        ):
-            points = processor._merge_open_threat_overlay(
-                context,
-                np.zeros((1280, 720, 3), dtype=np.uint8),
-                self.make_grid_with_ally(),
-                3,
-            )
+        points = mapper.merge_open_threat_overlay(
+            context,
+            np.zeros((1280, 720, 3), dtype=np.uint8),
+            self.make_grid_with_ally(),
+            3,
+        )
 
         self.assertEqual([], points)
-        self.assertEqual((1, -1), processor._coarse_threat_direction)
-        self.assertEqual([], processor._session.world.unit_points("enemy"))
+        self.assertEqual((1, -1), mapper.runtime.coarse_threat_direction)
+        self.assertEqual(
+            [], mapper.session.map.unit_points(CellKind.ENEMY)
+        )
 
     def test_only_exact_jagged_cell_is_persisted(self):
-        processor = self.make_processor()
+        mapper = self.make_mapper()
+        self.threat_classifier.hidden_enemy_cell = lambda *_args: (2, 3, 1.2)
         context = SimpleNamespace(run_recognition=lambda *_: None)
 
-        with patch(
-            "action.fight.battle_vision.threat_enemy_cell_from_mask",
-            return_value=(2, 3, 1.2),
-        ):
-            points = processor._merge_open_threat_overlay(
-                context,
-                np.zeros((1280, 720, 3), dtype=np.uint8),
-                self.make_grid_with_ally(),
-                4,
-            )
+        points = mapper.merge_open_threat_overlay(
+            context,
+            np.zeros((1280, 720, 3), dtype=np.uint8),
+            self.make_grid_with_ally(),
+            4,
+        )
 
         self.assertEqual([(2, 3)], points)
-        self.assertEqual([(2, 3)], processor._session.world.unit_points("enemy"))
+        self.assertEqual(
+            [(2, 3)], mapper.session.map.unit_points(CellKind.ENEMY)
+        )
 
     def test_jagged_hollow_cell_is_selected_from_red_grid(self):
-        processor = self.make_processor()
         hsv = np.zeros((1200, 720, 3), dtype=np.uint8)
         red = np.array((10, 160, 120), dtype=np.uint8)
         row, col = 4, 3
@@ -170,7 +216,7 @@ class ThreatCellTests(unittest.TestCase):
         hsv[y0 : y0 + 120, x0 + 95 : x0 + 120] = red
         image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
-        result = battle_vision.threat_enemy_cell_from_mask(image, [])
+        result = ThreatClassifier().hidden_enemy_cell(image, [])
 
         self.assertIsNotNone(result)
         self.assertEqual((row, col), result[:2])
@@ -180,7 +226,7 @@ class EdgeRecenterTests(unittest.TestCase):
     def test_corner_unit_uses_diagonal_direction(self):
         unit = Cell(0, 5, unit_center=(690, 60))
 
-        direction = AutoFightProcessor._edge_recenter_direction(
+        direction = BattleMapBuilder.edge_recenter_direction(
             unit,
             x_bounds=(90, 630),
             y_bounds=(160, 1000),
@@ -189,11 +235,10 @@ class EdgeRecenterTests(unittest.TestCase):
         self.assertEqual((1, -1), direction)
 
     def test_hidden_bottom_right_target_uses_diagonal_nudge(self):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
-        processor._session = BattleSessionState(key="edge-hidden")
+        mapper = make_mapper(session=BattleSessionState(key="edge-hidden"))
         grid = BattleGrid()
         ally = grid.get_cell(5, 3)
-        ally.cell_type = CellType.SELF
+        ally.kind = CellKind.SELF
         ally.unit_center = (420, 660)
         calls = []
 
@@ -201,9 +246,9 @@ class EdgeRecenterTests(unittest.TestCase):
             calls.append(direction)
             return False, None, None
 
-        processor._pan_world_once = fake_pan
+        mapper.pan_world_once = fake_pan
 
-        processor._recenter_edge_allies(
+        mapper.recenter_edge_allies(
             object(), grid, 1, known_target=(9, 5)
         )
 
@@ -212,23 +257,23 @@ class EdgeRecenterTests(unittest.TestCase):
 
 class FocusKnownAllyTests(unittest.TestCase):
     def test_actionable_edge_ally_is_kept_when_camera_hits_boundary(self):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
-        processor._session = BattleSessionState(key="focus-boundary")
-        processor._set_threat_overlay = lambda *_args: True
+        mapper = make_mapper(
+            session=BattleSessionState(key="focus-boundary")
+        )
         image = object()
 
         grid = BattleGrid()
         ally = grid.get_cell(9, 3)
-        ally.cell_type = CellType.SELF
-        processor._scan_world_view = lambda *_args, **_kwargs: grid
-        processor._pan_world_once = (
+        ally.kind = CellKind.SELF
+        mapper.scan_world_view = lambda *_args, **_kwargs: grid
+        mapper.pan_world_once = (
             lambda *_args, **_kwargs: (False, None, image)
         )
 
         with patch(
-            "action.fight.battle_camera.screencap", return_value=image
+            "action.fight.battle_mapping.screencap", return_value=image
         ):
-            focused = processor._focus_known_ally(object(), round_seen=4)
+            focused = mapper.focus_known_ally(object(), round_seen=4)
 
         self.assertIsNotNone(focused)
         self.assertIs(grid, focused[0])
@@ -236,87 +281,91 @@ class FocusKnownAllyTests(unittest.TestCase):
 
 
 class CoarsePursuitLoopTests(unittest.TestCase):
-    def make_processor(self):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
-        processor._session = BattleSessionState(key="coarse-loop")
-        processor._last_confirmed_move_direction = None
-        return processor
+    def make_strategy(self):
+        session = BattleSessionState(key="coarse-loop")
+        runtime = BattleRuntime()
+        strategy = BattleStrategy(
+            session,
+            BattleActions(session, GridClassifier()),
+            GridClassifier(),
+            runtime,
+        )
+        return strategy, session, runtime
 
     def test_only_immediate_reverse_waits_one_turn_and_clears_direction(self):
-        processor = self.make_processor()
-        processor._last_confirmed_move_direction = (-1, 1)
-        processor._session.last_move_direction = (1, -1)
+        strategy, session, runtime = self.make_strategy()
+        runtime.last_confirmed_move_direction = (-1, 1)
+        session.last_move_direction = (1, -1)
         ally = Cell(5, 1)
         reverse = Cell(4, 2)
 
-        candidates = processor._coarse_move_candidates([reverse], ally)
+        candidates = strategy.coarse_move_candidates([reverse], ally)
 
         self.assertEqual([], candidates)
-        self.assertIsNone(processor._last_confirmed_move_direction)
-        self.assertIsNone(processor._session.last_move_direction)
+        self.assertIsNone(runtime.last_confirmed_move_direction)
+        self.assertIsNone(session.last_move_direction)
 
     def test_recent_coarse_destination_is_deprioritized(self):
-        processor = self.make_processor()
+        strategy, session, runtime = self.make_strategy()
         ally = Cell(5, 1)
         recent = Cell(4, 2)
         fresh = Cell(6, 2)
-        processor._session.record_move_point((4, 2))
+        session.record_move_point((4, 2))
 
-        candidates = processor._coarse_move_candidates(
-            [recent, fresh], ally
-        )
+        candidates = strategy.coarse_move_candidates([recent, fresh], ally)
 
         self.assertEqual([fresh], candidates)
 
 
 class OccludedAttackTargetTests(unittest.TestCase):
     def test_adjacent_red_bar_is_promoted_when_attack_layer_exists(self):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
-        processor.scanner = SimpleNamespace(ATTACK_MARKER_Y_OFFSET=40)
+        classifier = GridClassifier()
         grid = BattleGrid()
-        ally = Cell(1, 1, cell_type=CellType.SELF, unit_center=(180, 200))
+        ally = Cell(1, 1, kind=CellKind.SELF, unit_center=(180, 200))
         enemy = grid.get_cell(1, 2)
-        enemy.cell_type = CellType.ENEMY
+        enemy.kind = CellKind.ENEMY
         enemy.unit_center = (300, 200)
         grid.get_cell(3, 3).is_attackable = True
 
-        promoted = processor._promote_occluded_adjacent_targets(grid, ally)
+        promoted = classifier.promote_occluded_adjacent_targets(grid, ally)
 
         self.assertEqual([enemy], promoted)
         self.assertEqual((300, 160), enemy.attack_center)
 
     def test_adjacent_red_bar_is_not_promoted_without_attack_layer(self):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
-        processor.scanner = SimpleNamespace(ATTACK_MARKER_Y_OFFSET=40)
+        classifier = GridClassifier()
         grid = BattleGrid()
-        ally = Cell(1, 1, cell_type=CellType.SELF, unit_center=(180, 200))
+        ally = Cell(1, 1, kind=CellKind.SELF, unit_center=(180, 200))
         enemy = grid.get_cell(1, 2)
-        enemy.cell_type = CellType.ENEMY
+        enemy.kind = CellKind.ENEMY
         enemy.unit_center = (300, 200)
 
-        promoted = processor._promote_occluded_adjacent_targets(grid, ally)
+        promoted = classifier.promote_occluded_adjacent_targets(grid, ally)
 
         self.assertEqual([], promoted)
         self.assertFalse(enemy.is_attackable)
 
     def test_adjacent_hidden_enemy_is_double_clicked_without_yellow_marker(self):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
-        processor._session = BattleSessionState(key="hidden-adjacent")
-        processor._promote_occluded_adjacent_targets = lambda *_: []
+        session = BattleSessionState(key="hidden-adjacent")
+        classifier = GridClassifier()
+        actions = BattleActions(session, classifier)
+        strategy = BattleStrategy(
+            session, actions, classifier, BattleRuntime()
+        )
         clicked = []
-        processor._click_cell = (
-            lambda _context, cell, label: clicked.append(
-                (cell.row, cell.col, label)
+        actions.click_cell = (
+            lambda _context, cell, kind, label: clicked.append(
+                (cell.row, cell.col, kind, label)
             )
             or True
         )
-        processor._verify_action_result = lambda *_: (True, False)
+        actions.verify_action_result = lambda *_: (True, False)
 
         grid = BattleGrid()
         ally = grid.get_cell(5, 3)
-        ally.cell_type = CellType.SELF
+        ally.kind = CellKind.SELF
 
-        result = processor._decide_and_act(
+        result = strategy.decide_and_act(
             object(),
             grid,
             ally,
@@ -327,7 +376,9 @@ class OccludedAttackTargetTests(unittest.TestCase):
         )
 
         self.assertEqual((True, None, False), result)
-        self.assertEqual([(5, 2, "相邻威胁中心攻击")], clicked)
+        self.assertEqual(
+            [(5, 2, ActionKind.ATTACK, "相邻威胁中心攻击")], clicked
+        )
 
     def test_hidden_enemy_attack_requires_eight_direction_adjacency(self):
         ally = Cell(5, 3)
@@ -346,24 +397,46 @@ class OccludedAttackTargetTests(unittest.TestCase):
 class ActionKindTests(unittest.TestCase):
     """动作标签 → 点击方式 / 结果校验语义的唯一约定。"""
 
-    def test_attack_labels_map_to_attack(self):
-        for label in ("攻击", "相邻威胁中心攻击", "威胁中心攻击"):
-            self.assertEqual("attack", AutoFightProcessor._action_kind(label))
+    def test_action_kind_replaces_label_sniffing(self):
+        self.assertEqual(ActionKind.ATTACK.value, "attack")
+        self.assertEqual(ActionKind.MOVE.value, "move")
 
-    def test_move_label_maps_to_move(self):
-        self.assertEqual("move", AutoFightProcessor._action_kind("移动"))
+    def test_threat_center_plan_is_an_attack(self):
+        session = BattleSessionState(key="threat-center")
+        classifier = GridClassifier()
+        strategy = BattleStrategy(
+            session,
+            BattleActions(session, classifier),
+            classifier,
+            BattleRuntime(),
+        )
+        grid = BattleGrid()
+        ally = grid.get_cell(5, 3)
+        ally.kind = CellKind.SELF
+        hidden = grid.get_cell(5, 2)
+        hidden.is_attackable = True
 
-    def test_click_cell_uses_the_click_point_matching_the_label(self):
-        processor = AutoFightProcessor.__new__(AutoFightProcessor)
+        plan = strategy.pursue_remote_direction(
+            grid, ally, [Cell(5, 4)], (0, 1), (5, 2)
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(ActionKind.ATTACK, plan.kind)
+        self.assertEqual("威胁中心攻击", plan.label)
+
+    def test_click_cell_uses_the_click_point_matching_the_kind(self):
+        actions = BattleActions(
+            BattleSessionState(key="click"), GridClassifier()
+        )
         clicked = []
-        processor._click_and_log = (
+        actions.click_and_log = (
             lambda _context, x, y, _label: clicked.append((x, y)) or True
         )
         cell = Cell(2, 3, move_center=(300, 400), attack_center=(310, 410))
 
         with patch("action.fight.battle_action.time.sleep"):
-            processor._click_cell(object(), cell, "移动")
-            processor._click_cell(object(), cell, "威胁中心攻击")
+            actions.click_cell(object(), cell, ActionKind.MOVE, "移动")
+            actions.click_cell(object(), cell, ActionKind.ATTACK, "攻击")
 
         self.assertEqual(
             [(300, 400), (300, 400), (310, 410), (310, 410)], clicked
@@ -390,7 +463,7 @@ class EdgePipelineTests(unittest.TestCase):
         enemy = Cell(0, 3, unit_center=(360, 80))
         ally = Cell(4, 5, unit_center=(690, 540))
 
-        direction = AutoFightProcessor._edge_recenter_direction(
+        direction = BattleMapBuilder.edge_recenter_direction(
             [enemy, ally],
             x_bounds=(90, 630),
             y_bounds=(160, 1000),

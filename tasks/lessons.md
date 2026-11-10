@@ -124,3 +124,64 @@ import 失败被跳过）。跑测试时**先看用例总数**，和基线对得
 现在事件处理只有 `detect_and_manage_event` 一处，
 由 `ensure_at_bigmap` 复用，战前 `preprocess_events` 也走它 ——
 特例分支越少，能漏的路径就越少。
+
+## 2026-11-10 — 用 Pipeline OCR 节点读 HUD 数字；`all_results` 才是全量识别结果
+
+**场景**：战斗内「回合是否推进」原本靠右下角固定 ROI 的像素差分判定，
+改成用 Pipeline 的 OCR 节点读「回合：N」。
+
+**教训 1 —— OCR 节点的 ROI 会直接决定数字能不能被检出**：
+同一个数字「1」，在 ROI `[570,1135,150,80]` 下 10 帧里只有 2 帧被识别到
+（只读到「回合：」），收紧到 `[570,1160,150,55]` 后 10/10 帧都读到数字。
+**ROI 改完必须拿同一批截图对比读数**，不能只看「命中/未命中」。
+
+**教训 2 —— OCR 节点的 `all_results` 是全部检测框，不受 `expected` 过滤影响**：
+`expected` 只决定 `filtered_results` 与节点是否命中。
+所以解析数字要读 `all_results`，并自己判断「标签在不在同一个框里」，
+否则会拿不到被 expected 滤掉的数字框。
+
+**教训 3 —— 同一行文字可能被拆成多个文本框，也可能合成一个**：
+ROI 窄时是 `回合：` + `1` 两个框，ROI 宽一点或 expected 是列表时是
+`回合：1` 一个框。解析代码必须同时兼容两种形态（本项目按「先找含『回合』的
+标签，再取数字」实现）。
+
+**教训 4 —— `Resource.get_node_data()` 返回的是合并后的节点结构**：
+它的 `recognition` 是 `{'type': ..., 'param': {...}}`，
+`roi` / `expected` 都在 `recognition.param` 下面。
+直接 `node.get('roi')` 会拿到 None，ROI 退化成全屏 ——
+全屏 OCR 会把「加速×4」「170」之类的数字当成回合数。
+**造 OCR 参数时要从 `recognition.param` 里取**。
+
+## 2026-11-10 — 战斗模块四层重构的实机验证与 A/B 定性
+
+**场景**：把 `agent/action/fight/` 的 8 个 Mixin 模块重构成 map / classify / action /
+strategy 四层。单测全绿，但「实机跑一场战斗」这一步差点被工具链卡死，
+最后靠「git worktree 拉一份旧代码做 A/B」才把「回归」和「既有缺陷」分开。
+
+**教训 1 —— 怀疑回归时，用 worktree 跑旧代码做 A/B，比读代码更快定性**：
+实机跑到「战斗卡住、双方都定位不到我方单位」时，单看新代码无法判断是
+重构引入的还是本来就有的。`git worktree add <path> HEAD` 拉一份旧代码，
+给同一台模拟器跑同一个入口，逐行对比日志，两分钟就定性：
+「重构前后日志一字不差 → 既有缺陷，不是回归」。
+worktree 里缺 gitignore 的大文件（OCR 模型）要手动补，
+旧代码若依赖「仓库根有 interface.json 才进开发模式」要手动造一份。
+
+**教训 2 —— MaaMCP 的 `run_pipeline` 报「获取 Tasker 失败」时，先怀疑 controller**：
+`get_or_create_tasker` 依赖 `tasker.inited`，controller 失效后所有 pipeline 调用
+都会以同一句错误失败，但 `screencap` 可能仍然正常（或反过来）。
+**用 `screencap` 能否返回图片路径来判断 controller 是否健康**，
+别把工具链故障当成 pipeline 写错了。
+另外 MaaMCP 默认资源目录（`%LOCALAPPDATA%/MaaMCP/resource`）不存在时
+`post_bundle` 会失败，资源加载要自己 `post_bundle` 项目 bundle。
+
+**教训 3 —— 实机验证要看「每一层各自的证据行」，不是看流程有没有跑完**：
+四层各留了可 grep 的日志锚点：classify 是 `Battle_UnitScan_*` 与
+「确认锯齿空洞敌人格」，map 是 `origin` / `explored` / 「顺时针建图结束」，
+action 是「危险覆盖层切换为 开启/关闭」，strategy 是「切换为主动搜索与追击模式」。
+逐条对上，才算四层都走到了。
+
+**教训 4 —— OCR 读数偶发失败时，先确认「读的是哪一帧」**：
+「参考帧未读到回合数字」只在某一轮出现、下一轮又正常读到，
+说明不是节点配错（节点名 / ROI / expected 都对，实测能读到「回合：3」score 0.989），
+而是那一帧画面处在动画/切换瞬间。**判定 OCR 逻辑有没有问题，要用「同一帧能不能读出来」
+做对照，而不是只看「有没有成功过」。**
