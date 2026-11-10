@@ -59,10 +59,12 @@ ENVIRONMENT_OBSERVATION_MAX_AGE = 2
 
 
 class CellKind(Enum):
-    """格子里是什么。
+    """全局地图里的单位分类。
 
-    角色（我方 / 敌方 / 友军）与场地（祭坛、石碑等静态目标）共用一套
-    词汇，避免“枚举 + 布尔”双写导致的分类分裂。
+    ``EMPTY`` / ``SELF`` / ``ENEMY`` / ``FRIEND`` 同时用于局部网格的
+    “格子里是谁”；``ENVIRONMENT`` 只用于全局地图，单独存放祭坛、
+    石碑这类静态目标——它们在局部网格里仍然带着颜色身份，
+    形态信息由 :attr:`Cell.is_environment` 承载。
     """
 
     EMPTY = "empty"
@@ -74,7 +76,16 @@ class CellKind(Enum):
 
 @dataclass
 class Cell:
-    """局部网格中的一格。"""
+    """局部网格中的一格。
+
+    ``kind`` 表达「格子里是谁」（我方 / 敌方 / 友军），
+    ``is_environment`` 表达「它长什么样」（祭坛、石碑等实体长条）。
+    两者正交：实体长条同样可能是敌方红色，但它的可点击目标是场地，
+    不能当普通敌人处理。旧模型用 ``CellType`` + ``is_environment_object``
+    两个字段表达同一件事，这里保持相同语义——合并成单值枚举会让
+    “身份”和“形态”互相覆盖，识别层一旦丢字段就会把我方单位
+    整体误判成敌人。
+    """
 
     row: int
     col: int
@@ -85,6 +96,7 @@ class Cell:
     attack_center: Tuple[int, int] = (0, 0)
     is_moveable: bool = False
     is_attackable: bool = False
+    is_environment: bool = False
 
     def safe_click_point(self) -> Tuple[int, int]:
         """单位优先点击当前截图中的实际状态条中心。"""
@@ -131,11 +143,15 @@ class BattleGrid:
 
     @property
     def enemy_units(self) -> List[Cell]:
-        return self._of_kind(CellKind.ENEMY)
+        return [
+            cell
+            for cell in self
+            if cell.kind == CellKind.ENEMY and not cell.is_environment
+        ]
 
     @property
     def environment_units(self) -> List[Cell]:
-        return self._of_kind(CellKind.ENVIRONMENT)
+        return [cell for cell in self if cell.is_environment]
 
     @property
     def friend_units(self) -> List[Cell]:
@@ -159,6 +175,7 @@ class BattleGrid:
             cell.attack_center = (0, 0)
             cell.is_moveable = False
             cell.is_attackable = False
+            cell.is_environment = False
 
     def get_cell(self, row: int, col: int) -> Optional[Cell]:
         if 0 <= row < ROWS and 0 <= col < COLS:
@@ -553,6 +570,10 @@ class BattleSessionState:
     # 战斗结算结果是否已经打印过。同一场战斗会被多个调用点反复检测，
     # 结算提示只打一次；新的一场战斗会新建 session，自然重新允许打印。
     reported_result: Optional[bool] = None
+    # 最近一次从 HUD「回合：N」读到的数字。HUD 数字只有十几个像素，
+    # OCR 偶发读不出来；记住上一次读到的值，可以在参考帧读不到时
+    # 继续拿它当回合基线，不至于让整轮「回合推进」判定彻底失效。
+    last_round_number: Optional[int] = None
     recent_move_points: List[GridPoint] = field(default_factory=list)
     map: BattleMap = field(default_factory=BattleMap)
     explorer: ClockwiseExplorer = field(default_factory=ClockwiseExplorer)

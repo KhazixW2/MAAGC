@@ -804,6 +804,8 @@ class AutoFightProcessor(CustomAction):
                 cell = grid.cells[row][col]
                 if row == ally.row and col == ally.col:
                     base = "A"
+                elif cell.is_environment:
+                    base = "G"
                 elif cell.kind == CellKind.ENEMY:
                     base = "E"
                 elif cell.kind == CellKind.FRIEND:
@@ -820,6 +822,7 @@ class AutoFightProcessor(CustomAction):
             matrix_lines.append(" ".join(row_values))
 
         logger.debug(
-            "统一矩阵 (A=当前, E=敌人, F=友军, S=我方, 1=可攻击, 2=可移动):\n"
+            "统一矩阵 (A=当前, G=场地, E=敌人, F=友军, S=我方, "
+            "1=可攻击, 2=可移动):\n"
             + "\n".join(matrix_lines)
         )

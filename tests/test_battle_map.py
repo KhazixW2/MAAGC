@@ -32,7 +32,10 @@ def make_grid(
     for row, col in friends:
         grid.cells[row][col].kind = CellKind.FRIEND
     for row, col in environment:
-        grid.cells[row][col].kind = CellKind.ENVIRONMENT
+        # 场地目标与颜色身份正交：实体长条通常来自红色节点，
+        # 但它不是普通敌人，不能进 enemy_units。
+        grid.cells[row][col].kind = CellKind.ENEMY
+        grid.cells[row][col].is_environment = True
     return grid
 
 

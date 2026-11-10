@@ -3,10 +3,17 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
 
 from action.fight.battle_action import BattleActions  # noqa: E402
 from action.fight.battle_map import BattleSessionState  # noqa: E402
+
+
+def _frame(value: int = 0) -> np.ndarray:
+    """构造一帧 720p 画面，供像素差分判据使用。"""
+    return np.full((1280, 720, 3), value, dtype=np.uint8)
 
 
 class _Context:
@@ -77,12 +84,36 @@ class RoundNumberTest(unittest.TestCase):
         )
         self.assertTrue(all(not changed for _img, changed in results))
 
-    def test_watch_round_without_baseline_never_changes(self):
-        """参考帧读不到数字时不做任何回合推进判定。"""
-        context = _Context([[], ["回合:4"], ["回合:4"]])
-        frames = iter(["f1", "f2"])
+    def test_watch_round_without_baseline_uses_pixel_fallback(self):
+        """参考帧读不到数字时退回像素差分判据，而不是永远判定“未变化”。"""
+        context = _Context([[], [], [], []])
+        reference = _frame(0)
+        frames = iter([_frame(120), _frame(120)])
         results = list(
-            self._probe().watch_round(context, "reference", frames)
+            self._probe().watch_round(context, reference, frames)
+        )
+        self.assertEqual(
+            [changed for _img, changed in results],
+            [False, True],
+        )
+
+    def test_watch_round_without_baseline_stable_pixels_never_change(self):
+        """像素差分也没有变化时不会误判为回合推进。"""
+        context = _Context([[], [], []])
+        reference = _frame(0)
+        frames = iter([_frame(0), _frame(0)])
+        results = list(
+            self._probe().watch_round(context, reference, frames)
+        )
+        self.assertTrue(all(not changed for _img, changed in results))
+
+    def test_watch_round_prefers_ocr_over_pixels(self):
+        """OCR 可读时以数字为准，像素差分不参与判定。"""
+        context = _Context([["回合:3"], ["回合:3"], ["回合:3"]])
+        reference = _frame(0)
+        frames = iter([_frame(120), _frame(120)])
+        results = list(
+            self._probe().watch_round(context, reference, frames)
         )
         self.assertTrue(all(not changed for _img, changed in results))
 

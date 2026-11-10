@@ -607,9 +607,14 @@ MaaFW 侧只在 `ensure_at_bigmap` 走到「不在大地图」分支时才做事
 | 项 | 结果 |
 | --- | --- |
 | `python -m py_compile agent/action/fight/*.py tests/*.py` | ✓ COMPILE_OK |
-| `python -m unittest discover -s tests -t tests -p "test_*.py"` | ✓ **79 tests OK**（基线 78，新增 1 条 `fresh_targets` 用例） |
+| `python -m unittest discover -s tests -t tests -p "test_*.py"` | ✓ **90 tests OK**（真实基线 71，新增 19 条） |
 | `python check_resource.py assets/resource/base` | ✓ All directories checked |
 | 依赖环检查 | ✓ `battle_map` 无内部 import；`map → vision/classify → action → strategy → mapping → processor` 单向无环 |
+
+> **基线数字更正**：本节原写「基线 78」，是错的。用 `git worktree` 拉出
+> `745bdb6` 实际跑出来的基线是 **71 tests**（逐文件加总核对过）。
+> 之前写 78 说明数字核对环节从未真正执行过——重构后 79 条里也一直
+> 混着「看起来变多了」的错觉。
 
 ### 实机验证（阶段 8）
 
@@ -620,28 +625,74 @@ MaaFW 侧只在 `ensure_at_bigmap` 走到「不在大地图」分支时才做事
 | --- | --- |
 | 完整业务流程 | ✓ 找城（近邻探测命中「雄月城」）→ 接任务（选「世界第一好爸爸」）→ 进入战斗 |
 | classify 层 | ✓ `Battle_UnitScan_Blue/Red/Green` 色块扫描 + 「确认锯齿空洞敌人格」持续输出 |
-| map 层 | ✓ 顺时针全局建图推进 `origin` / `explored`（80→100→155→165），「顺时针建图结束: complete=True, swipes=10, allies=0, enemies=16」 |
+| map 层 | ✓ 顺时针全局建图推进 `origin` / `explored`（80→100→155→165） |
 | action 层 | ✓ 「危险覆盖层切换为 开启/关闭 (n/2): click=True」等操作全部执行 |
-| strategy 层 | ✓ 「战斗到达第 1 回合仍未结束，切换为主动搜索与追击模式」「主动阶段完整建图后仍无法同时定位我方和敌人，本回合等待敌人移动后重试 (1/12)」 |
+| strategy 层 | ✓ 「战斗到达第 1 回合仍未结束，切换为主动搜索与追击模式」 |
 | 回合数字读取 | ✓ `FightRoundNumber` OCR 读到「回合：3」（score 0.989，box `[585,1165,109,26]`） |
 
-**行为等价性 A/B（关键）**：在同一场战斗中，用 `git worktree` 拉出重构前的
-`HEAD`（旧 Mixin 版 `battle_*`）跑同一入口 `AutoFight_Start`，日志逐行对照：
+### 代码审查回合（阶段 9）
 
-```text
-旧代码：全局地图缺少我方或敌人，触发威胁层顺时针探索: allies=False, enemies=True
-新代码：全局地图缺少我方或敌人，触发威胁层顺时针探索: allies=False, enemies=True
-```
+对 `a6972f5` 做了一次完整代码审查（对比 `745bdb6`），结论是 **BLOCK**，
+查出 3 个 CRITICAL、2 个 HIGH。**上一轮写的「allies=0 是既有缺陷」结论是错的**，
+下面逐条更正。
 
-结论：本场战斗没能取胜（双方都卡在「定位不到我方单位 → 只能结束回合等待」）
-**是重构前就存在的行为**，不是四层拆分引入的回归。
+**C1（CRITICAL，已修）** `battle_classify.scan_grid` 把节点类型丢了：
+`_find_status_bar_cells` 的返回值把「聚类形态」写成了 `CellKind`，
+颜色身份（蓝=我方 / 红=敌方 / 绿=友军）被整个丢弃，于是
+**我方和友军单位全部被判成敌人**。`allies=0` 就是这么来的，
+不是既有缺陷，是本次重构引入的回归。
+
+**C2（CRITICAL，已修）** 红色碎片的过滤极性被写反：
+旧逻辑「实体长条无条件保留、普通红条必须带生命数字」，
+新逻辑反了过来——祭坛被整块丢掉，尸体碎片变成假敌人。
+
+**C3（CRITICAL，已修）** 同格多色的优先级语义丢失：
+`_PRIORITY` 表里的 `FRIEND/SELF` 变成死条目（比较的 kind 恒为
+`ENEMY/ENVIRONMENT`），同格时变成「后写入者获胜」，
+`UNIT_NODES` 顺序是 SELF→ENEMY→FRIEND，于是敌方会盖掉我方。
+
+**H1（HIGH，已修）** 回合推进判定从像素差分换成 OCR 后，
+参考帧读不到数字就永久失效（`wait_for_round_change` 恒 False，
+两次结束回合后直接判负）。现在 OCR 为主判据、像素差分为兜底，
+两者任一确认即认为回合推进。
+
+**H2（HIGH，已修）** `capture_selected_state` 的选中态重置漏掉环境目标，
+残留上一帧的 `unit_center` / `target_center`。
+
+**M1（MEDIUM，已修）** `_log_matrix` 把环境目标打成 `0`，
+和空格无法区分，排查时直接掩盖了根因。现在环境目标打成 `G`。
+
+**M2（MEDIUM，已修）** 识别层一条单测都没有：79 条用例里
+`GridClassifier.scan_grid` 被调用 0 次，这正是 C1/C2/C3 全绿通过的原因。
+新增 `tests/test_battle_classify.py` 9 条，覆盖颜色身份、碎片过滤、
+实体长条、同格优先级。
+
+**修复方式**：局部网格重新拆成两个正交维度——
+`Cell.kind`（身份：谁）和 `Cell.is_environment`（形态：是不是实体长条），
+`CellKind.ENVIRONMENT` 只保留给全局地图做环境目标分桶。
+单值枚举表达不了两个维度，合并时丢了身份信息。
+
+### 修复后的实机复验（2026-11-11）
+
+修复 C1/C2/C3 后重跑同一场战斗（MuMu，ADB `127.0.0.1:16448`）：
+
+| 项 | 结果 |
+| --- | --- |
+| 战斗识别 | ✓ `战场识别: 6x10, 我方=1, 人物敌方=7` —— C1 修复后我方单位被正确识别（此前恒为 0） |
+| 统一矩阵 | ✓ 打印出 `S`/`A`（我方）与 `E`（敌人）分区，环境目标打成 `G`（M1 修复） |
+| 行动 | ✓ 选我方角色 → 选敌 → 双击攻击 `(6,4) -> (482,779)` → 「攻击确认成功: 目标红色状态条像素 419 -> 0」 |
+| 回合推进 | ✓ OCR 主判据与像素兜底都触发（「主动阶段已确认回合变化」「结束回合按钮连续命中」） |
+| 战果 | ✓ **战斗胜利**，识别到胜利结算页，战后流程完成并返回大地图 |
+
+> 注：日志里的「边缘单位重定位: allies=0」统计的是**处于边缘需要重心化的我方单位数**，
+> 不是「识别到的我方单位数」，为 0 属正常，不是 C1 的症状。
 
 ### 遗留
 
-- **本场战斗没能取胜**：全局建图时 `allies=0`（我方单位未被识别为 SELF），
-  策略层因此无法出手，只能结束回合等待，直到 `MAX_NO_PROGRESS_CYCLES`。
-  重构前后行为一致，属于既有缺陷，不在本次重构范围；后续可单独排查
-  「我方单位识别为 SELF」这条链路。
-- **回合数字 OCR 偶发读不到**：一次等待中出现「参考帧未读到回合数字」，
-  另一次正常读到。读取逻辑要求同时命中「含『回合』的文本框」和「数字框」，
-  画面动画期间可能两者都没检出。
+- **文件行数超标**：`battle_strategy.py` 1002 行、`battle_mapping.py` 958 行，
+  超过项目「单文件 800 行」上限。长度是从旧模块继承的，不是本次引入，
+  但重构后仍需拆分。
+- ~~**文档里的旧模块路径**~~：已更新为四层新模块名
+  （`battle_map.py` / `battle_classify.py` / `battle_action.py` /
+  `battle_strategy.py` / `battle_mapping.py`），Pipeline 文件
+  `battle_grid.json` 名称不变、未动。

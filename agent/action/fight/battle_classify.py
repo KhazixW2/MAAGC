@@ -94,11 +94,11 @@ class GridClassifier:
     ATTACK_MARKER_MIN_SPAN = 70
 
     # 后写入的单位类型优先级更高。我方状态条比环境中的红色装饰更可靠。
-    # 场地（祭坛）与敌方同源，优先级相同。
+    # 优先级只看“身份”（谁在这个格子里），形态（是否实体长条）单独
+    # 记在 Cell.is_environment 上，两者正交。
     _PRIORITY = {
         CellKind.EMPTY: 0,
         CellKind.ENEMY: 1,
-        CellKind.ENVIRONMENT: 1,
         CellKind.FRIEND: 2,
         CellKind.SELF: 3,
     }
@@ -132,10 +132,12 @@ class GridClassifier:
             unit_cells = self._find_status_bar_cells(boxes)
             if cell_kind == CellKind.ENEMY:
                 before_count = len(unit_cells)
+                # 红色节点同时命中尸体衣物、技能特效。实体长条（祭坛、
+                # 石碑）无条件保留，普通红条必须带生命数字才算活体单位。
                 unit_cells = [
                     unit
                     for unit in unit_cells
-                    if unit[-1] is not CellKind.ENVIRONMENT
+                    if unit[-1]
                     or self._has_vitality_digit(boxes, unit[2], unit[3])
                 ]
                 rejected = before_count - len(unit_cells)
@@ -154,12 +156,13 @@ class GridClassifier:
                 center_y,
                 target_x,
                 target_y,
-                kind,
+                is_solid_bar,
             ) in unit_cells:
                 cell = grid.get_cell(row, col)
-                if cell is None or self._PRIORITY[cell.kind] > self._PRIORITY[kind]:
+                if cell is None or self._PRIORITY[cell.kind] > self._PRIORITY[cell_kind]:
                     continue
-                cell.kind = kind
+                cell.kind = cell_kind
+                cell.is_environment = is_solid_bar
                 # 单位与点击坐标来自同一个状态条聚类。格子只负责决策，
                 # 不再用固定格心覆盖当前画面的真实坐标。
                 cell.unit_center = (center_x, center_y)
@@ -172,8 +175,12 @@ class GridClassifier:
 
     def _find_status_bar_cells(
         self, boxes: Iterable[Tuple[int, int, int, int]]
-    ) -> List[Tuple[int, int, int, int, int, int, CellKind]]:
-        """把分段状态条聚类为单位所在格子。"""
+    ) -> List[Tuple[int, int, int, int, int, int, bool]]:
+        """把分段状态条聚类为单位所在格子。
+
+        末位布尔值表示该状态条是不是实体长条（祭坛、石碑等场地目标），
+        颜色身份由调用方按节点给出，两者不能互相替代。
+        """
         candidates = []
         solid_bars: List[List[Tuple[int, int, int, int]]] = []
         flat_bars: List[List[Tuple[int, int, int, int]]] = []
@@ -344,7 +351,7 @@ class GridClassifier:
                     center_y,
                     target_x,
                     target_y,
-                    CellKind.ENVIRONMENT if is_solid_bar else CellKind.ENEMY,
+                    is_solid_bar,
                 )
 
         return sorted(
@@ -356,7 +363,7 @@ class GridClassifier:
                     center_y,
                     target_x,
                     target_y,
-                    kind,
+                    is_solid_bar,
                 )
                 for (row, col), (
                     _,
@@ -364,7 +371,7 @@ class GridClassifier:
                     center_y,
                     target_x,
                     target_y,
-                    kind,
+                    is_solid_bar,
                 ) in best_by_cell.items()
             ],
             key=lambda item: (item[0], item[1]),

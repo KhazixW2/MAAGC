@@ -71,6 +71,10 @@ class BattleActions:
     ROUND_NUMBER_NODE = "FightRoundNumber"
     # 连续读到同一个新回合数字的帧数，达到后才确认回合推进。
     ROUND_CONFIRM_FRAMES = 2
+    # OCR 读不到回合数字时的兜底判据：比较常驻回合数字区域的像素差分。
+    ROUND_DIGIT_ROI = (670, 1175, 20, 25)
+    ROUND_CHANGE_THRESHOLD = 10.0
+    ROUND_STABLE_THRESHOLD = 1.5
 
     def __init__(
         self,
@@ -115,6 +119,7 @@ class BattleActions:
                     cell.kind = CellKind.EMPTY
                     cell.unit_center = (0, 0)
                     cell.target_center = (0, 0)
+                    cell.is_environment = False
             # 选中覆盖层会遮住红色血条，导致同帧敌人扫描变成 0。这里仅带入
             # 点击前约 0.1 秒的当前动作快照；每名角色行动前都会重新扫描，
             # 不会把上一动作/上一回合的坐标作为幽灵状态保留下来。
@@ -126,9 +131,10 @@ class BattleActions:
                 # 环境物件则需要临时提升为攻击候选，否则 enemy_units 的全局
                 # 过滤会让范围判定永远看不到它。这个提升只存在于当前角色的
                 # selected_grid，不会把祭坛带回普通敌人的全图搜索。
-                if cell.kind not in (CellKind.EMPTY, CellKind.ENVIRONMENT):
+                if cell.kind != CellKind.EMPTY and not cell.is_environment:
                     continue
                 cell.kind = CellKind.ENEMY
+                cell.is_environment = False
                 cell.unit_center = known_enemy.unit_center
                 cell.target_center = known_enemy.target_center
             self.classifier.scan_ranges(grid, context, img)
@@ -397,6 +403,13 @@ class BattleActions:
                 logger.error(f"{phase}未识别到结束回合按钮")
                 return False
 
+            # 基线必须在点击之前取。参考帧是回合开始时的快照，可能正
+            # 好落在战斗开场动画上（HUD 还没画完），读不出回合数字；
+            # 这里改用点击前的最新帧，并允许多取几帧重试。
+            baseline = self.acquire_round_baseline(context, current_img)
+            if baseline is None:
+                baseline = self.read_round_number(context, round_reference)
+
             logger.debug(f"{phase}点击结束回合 ({attempt}/2)")
             result = context.run_task("FightEndRound")
             if not task_result_has_hit(result, {"FightEndRound"}):
@@ -405,9 +418,19 @@ class BattleActions:
 
             timeout = 4.0 if attempt == 1 else 12.0
             if self.wait_for_round_change(
-                context, round_reference, timeout=timeout
+                context, round_reference, timeout=timeout, baseline=baseline
             ):
                 logger.debug(f"{phase}已确认回合变化")
+                self.record_round_advance(f"{phase}结束回合")
+                return None
+
+            # HUD 数字读不出来时的兜底证据：结束回合按钮只在我方回合
+            # 可点，敌方回合会消失；按钮消失后重新出现，说明这一回合
+            # 真的走完了。这条证据完全不依赖 OCR。
+            if self.wait_for_end_round_button_cycle(context, timeout=timeout):
+                logger.warning(
+                    f"{phase}回合数字不可读，改用结束回合按钮状态确认回合推进"
+                )
                 self.record_round_advance(f"{phase}结束回合")
                 return None
 
@@ -422,6 +445,61 @@ class BattleActions:
             logger.warning(f"{phase}第 {attempt} 次点击后回合未变化")
 
         logger.error(f"{phase}两次结束回合均未生效")
+        return False
+
+    def acquire_round_baseline(
+        self, context: Context, img: Any, timeout: float = 2.0
+    ) -> Optional[int]:
+        """在点击结束回合之前拿到回合数字基线。
+
+        HUD 的「回合：N」只有十几个像素，OCR 偶发读不出来；战斗刚
+        开场时 HUD 甚至还没画完。这里连续取几帧重试，把「读不到」
+        从「整轮判定失效」降级为「多花一两秒」。
+        """
+        number = self.read_round_number(context, img)
+        deadline = time.monotonic() + timeout
+        while number is None and time.monotonic() < deadline:
+            if context.tasker.stopping:
+                break
+            time.sleep(0.2)
+            retry_img = screencap(context)
+            if retry_img is None:
+                continue
+            number = self.read_round_number(context, retry_img)
+        if number is None:
+            logger.warning("点击结束回合前仍读不到回合数字基线")
+        return number
+
+    def wait_for_end_round_button_cycle(
+        self, context: Context, timeout: float
+    ) -> bool:
+        """等待「结束回合」按钮消失后重新出现。
+
+        结束回合按钮只在我方回合可点，敌方回合它会消失；按钮消失
+        后重新出现，说明这一回合已经走完。要求连续两帧消失、两帧
+        出现，避免把一次渲染抖动当成回合推进。
+        """
+        grace = 0.5
+        started = time.monotonic()
+        absent_frames = 0
+        present_frames = 0
+        seen_absent = False
+        for img in self.poll_frames(context, timeout, 0.25):
+            if time.monotonic() - started < grace:
+                continue
+            visible = bool(
+                context.run_recognition("FightEndRound", img).hit
+            )
+            if visible:
+                absent_frames = 0
+                present_frames += 1
+                if seen_absent and present_frames >= 2:
+                    return True
+            else:
+                present_frames = 0
+                absent_frames += 1
+                if absent_frames >= 2:
+                    seen_absent = True
         return False
 
     @classmethod
@@ -440,6 +518,8 @@ class BattleActions:
 
         HUD 文本可能被拆成“回合”和数字两个文本框，因此标签与数字要分开
         找，缺一不可，避免把结算页的其它数字当成回合。
+
+        读到数字时顺手记进会话，作为后续回合基线的兜底。
         """
         detail = context.run_recognition(self.ROUND_NUMBER_NODE, img)
         texts = (
@@ -447,44 +527,103 @@ class BattleActions:
             if detail
             else []
         )
-        if not any("回合" in text for text in texts):
+        labels = [text for text in texts if "回合" in text]
+        if not labels:
             return None
-        for text in texts:
+        number = self._extract_round_number(labels, texts)
+        if number is not None and self.session is not None:
+            self.session.last_round_number = number
+        return number
+
+    @staticmethod
+    def _extract_round_number(
+        labels: List[str], texts: List[str]
+    ) -> Optional[int]:
+        """从 HUD 文本框里取出回合数字。"""
+        # “回合：3”被识别成一个文本框时，数字就在同一个框里。
+        for text in labels:
             match = re.search(r"\d+", text)
             if match:
                 return int(match.group())
+        # “回合”与数字被拆成两个框时，只认纯数字框。ROI 内其它数字
+        # （血量、倒计时）不会和“回合”同框，不能拿来当回合号。
+        for text in texts:
+            stripped = text.strip()
+            if re.fullmatch(r"\d+", stripped):
+                return int(stripped)
         return None
 
     def watch_round(
-        self, context: Context, reference: Any, frames: Iterator[Any]
+        self,
+        context: Context,
+        reference: Any,
+        frames: Iterator[Any],
+        baseline: Optional[int] = None,
     ) -> Iterator[Tuple[Any, bool]]:
-        """逐帧读取回合数字，产出 ``(截图, 是否已确认回合推进)``。
+        """逐帧判断回合是否推进，产出 ``(截图, 是否已确认回合推进)``。
 
-        基线取自参考帧；只有连续两帧读到同一个新数字才确认推进，
-        避免把单帧识别抖动当成回合变化。
+        主判据是 OCR 读到的回合数字：基线取自参考帧，连续两帧读到
+        同一个新数字才确认推进，避免把单帧识别抖动当成回合变化。
+        参考帧读不到数字时可以显式传入基线（调用方在点击前用更新鲜
+        的帧取到的数字）。OCR 完全不可用时退回像素差分判据（旧实现），
+        不能因为一次识别失败就让整场战斗卡在“回合未变化”。
         """
-        baseline = self.read_round_number(context, reference)
         if baseline is None:
-            logger.warning("参考帧未读到回合数字，无法确认回合变化")
-        previous: Optional[int] = None
-        seen = 0
+            baseline = self.read_round_number(context, reference)
+        if baseline is None:
+            logger.warning("参考帧未读到回合数字，回合变化改用像素差分判定")
+        previous = baseline
+        stable_reads = 0
+        pixel_candidate: Any = None
+        pixel_stable = 0
         for img in frames:
             number = self.read_round_number(context, img)
-            if baseline is None or number is None or number == baseline:
-                previous, seen = None, 0
+            if number is not None and baseline is not None:
+                if number == previous:
+                    stable_reads += 1
+                else:
+                    previous, stable_reads = number, 1
+                yield img, (
+                    stable_reads >= self.ROUND_CONFIRM_FRAMES
+                    and number != baseline
+                )
+                continue
+            # OCR 本帧不可用，退回像素差分判据。
+            difference = battle_vision.round_marker_difference(
+                reference, img, self.ROUND_DIGIT_ROI
+            )
+            if difference < self.ROUND_CHANGE_THRESHOLD:
+                pixel_candidate, pixel_stable = None, 0
             else:
-                seen = seen + 1 if number == previous else 1
-                previous = number
-            yield img, seen >= self.ROUND_CONFIRM_FRAMES
+                stable_difference = (
+                    battle_vision.round_marker_difference(
+                        pixel_candidate, img, self.ROUND_DIGIT_ROI
+                    )
+                    if pixel_candidate is not None
+                    else float("inf")
+                )
+                pixel_stable = (
+                    pixel_stable + 1
+                    if stable_difference <= self.ROUND_STABLE_THRESHOLD
+                    else 1
+                )
+                pixel_candidate = img
+            yield img, pixel_stable >= self.ROUND_CONFIRM_FRAMES
 
     def wait_for_round_change(
-        self, context: Context, reference: Any, timeout: float
+        self,
+        context: Context,
+        reference: Any,
+        timeout: float,
+        baseline: Optional[int] = None,
     ) -> bool:
         """轮询回合数字，连续两帧读到同一个新数字即确认回合推进。"""
         frames = self.poll_frames(context, timeout, 0.2)
         return any(
             changed
-            for _, changed in self.watch_round(context, reference, frames)
+            for _, changed in self.watch_round(
+                context, reference, frames, baseline=baseline
+            )
         )
 
     def wait_for_scene_settle(self, context: Context, timeout: float) -> bool:
