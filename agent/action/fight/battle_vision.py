@@ -241,25 +241,3 @@ def camera_shift_is_real(
     return distance_squared >= 10000 or (
         response >= 0.08 and distance_squared >= 625
     )
-
-
-def round_marker_difference(
-    first: Any, second: Any, roi: Tuple[int, int, int, int]
-) -> float:
-    """比较常驻回合数字区域的平均差异。
-
-    OCR 读不到回合数字时，用它作为回合推进的兜底判据。
-    """
-    x, y, width, height = roi
-    if (
-        first is None
-        or second is None
-        or first.shape[0] < y + height
-        or second.shape[0] < y + height
-        or first.shape[1] < x + width
-        or second.shape[1] < x + width
-    ):
-        return 0.0
-    first_roi = first[y : y + height, x : x + width]
-    second_roi = second[y : y + height, x : x + width]
-    return float(cv2.absdiff(first_roi, second_roi).mean())

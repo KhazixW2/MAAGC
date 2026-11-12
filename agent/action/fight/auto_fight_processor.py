@@ -352,12 +352,11 @@ class AutoFightProcessor(CustomAction):
                 logger.error("连续主动回合没有可验证动作，停止进入外层恢复")
                 return False
 
-        # 最后一名角色行动后，游戏可能自行结束我方回合。留一个短暂
-        # 宽限期，仅当常驻回合数字没有变化时才点击结束回合。
-        if self.actions.wait_for_round_change(
-            context, state.reference, timeout=1.5
-        ):
-            logger.debug("检测到自动换回合，跳过结束回合按钮")
+        # 最后一名角色行动后，游戏可能自行结束我方回合。「结束回合」
+        # 按钮只在我方回合可点，按钮消失即说明回合已经自己走完，
+        # 这时按钮点不到，也不该再点。
+        if self.actions.wait_for_end_round_button_hidden(context, timeout=2.0):
+            logger.debug("结束回合按钮已消失，我方回合自动结束")
             self.actions.record_round_advance("角色行动后自动换回合")
             self.actions.wait_for_scene_settle(context, timeout=6.0)
             return None
