@@ -696,3 +696,220 @@ MaaFW 侧只在 `ensure_at_bigmap` 走到「不在大地图」分支时才做事
   （`battle_map.py` / `battle_classify.py` / `battle_action.py` /
   `battle_strategy.py` / `battle_mapping.py`），Pipeline 文件
   `battle_grid.json` 名称不变、未动。
+
+## 回合推进判据失效（2026-11-11，年度任务第 1/12 月中断）
+
+> 现象：`warn:参考帧未读到回合数字，无法确认回合变化` ×2 →
+> `err:被动阶段两次结束回合均未生效` → 年度任务在第 1 个月达到重试上限后中止。
+
+### 根因（实测数据，非推测）
+
+1. **基线取自过期帧**：`round_reference` 是回合开始时的快照，战斗开场
+   动画期间 HUD「回合：N」还没画完，这一帧必然读不到数字，
+   于是整轮「回合推进」判定失去基线。
+2. **兜底的像素差分判据本身是无效的**（用同一场战斗的实拍帧实测）：
+
+   | 帧对 | 回合号 | ROI(670,1175,20,25) 平均差分 |
+   | --- | --- | --- |
+   | 004636 vs 004804 | 11 → 11（同一回合） | **29.22** |
+   | 004154 vs 004636 | 3 → 11（真正换回合） | **4.46** |
+
+   HUD 数字只有 13×13 px，且画在半透明底栏上，场景动画的影响远大于
+   数字本身的变化 —— 差分信号是**反的**：阈值 10.0 会漏报真实换回合、
+   误报没有换回合。这条兜底路径不但没用，还会在「主动阶段自动换回合」
+   判定里造成误判（误判成已换回合就会跳过结束回合，战斗卡住）。
+
+### 修复
+
+- [x] 基线改用**点击结束回合之前**的最新帧读取，连续取帧重试；
+      整段读不到时退回会话内上次读到的数字（`BattleSessionState.last_round_number`）。
+- [x] 移除无效的像素差分判据，换成**不依赖 OCR** 的证据：
+      「结束回合」按钮只在我方回合可点，敌方回合会消失，
+      按钮消失后重新出现 = 这一回合真的走完了。
+- [x] 统一轮询（OCR 数字 + 按钮状态），按钮的「消失」即使发生在
+      点击后的头几帧也不会被漏判；弹窗盖住按钮时不算敌方回合。
+- [x] 结束回合前按钮不可见时，等它重新出现即确认回合已推进
+      （上一轮点击其实生效了，只是没确认上），不再直接判负。
+- [x] 「主动阶段自动换回合」改用按钮可见性判断，不再依赖回合数字。
+
+### 验证
+
+- [x] `python -m unittest discover -s tests -t tests -p "test_*.py"` → 全绿
+- [x] `python check_resource.py assets/resource/base` → 通过
+- [x] 实机复跑年度任务，确认被动阶段不再卡死（2026-11-12，见下节）
+
+## 回合推进判据第二次失效（2026-11-12，年度任务第 3/4 月中断）
+
+> 现象：`warn:被动阶段第 1 次点击后回合未变化` ×2 →
+> `err:被动阶段两次结束回合均未生效` → `第 3/4 个月达到重试上限，停止年度任务`。
+> 上一轮修的「收紧 ROI 单独认数字」并没有解决根因。
+
+### 根因（maafw.log 逐帧证据）
+
+`FightRoundNumber` 的 OCR **原始结果里一直有数字**，但节点返回给 Python 的
+结果里没有：
+
+```text
+"detail":{"all":[{"box":[584,1165,84,24],"text":"回合："},
+                 {"box":[675,1170,13,14],"text":"3"}],
+          "best":{"box":[584,1165,84,24],"text":"回合："},
+          "filtered":[{"box":[584,1165,84,24],"text":"回合："}]}
+```
+
+`expected` 是 `回合\s*[:：]?\s*\d*`：**「回合：」能匹配，「3」这个独立文本框
+匹配不上** → 被 `filtered` 剔掉。Python 侧的 `all_results` 对应的正是
+`filtered`，所以代码永远只看到标签，看不到数字。
+
+> 更正上一节的结论：「`all_results` 是全量、不受 expected 过滤」是**错的**。
+> 受过滤的是 `filtered`，而 Python API 拿到的是过滤后的结果。
+
+补充实测：上一轮加的独立节点 `FightRoundNumberDigit`
+（OCR `expected: \d+`，`roi [650,1150,70,55]`）**一次都没命中过**
+（`run_recognition` 3ms 返回、无任何识别事件）—— 小 ROI 里 13×14 px 的
+数字 OCR 直接不产出结果。等于加了个永远为空的节点。
+
+### 修复
+
+| # | 改动 | 文件 |
+| --- | --- | --- |
+| 1 | `FightRoundNumber.expected` 改成数组 `["回合\s*[:：]?\s*\d*", "\d+"]` —— 两个文本框都保留 | `assets/resource/base/pipeline/city.json` |
+| 2 | 删除永远不命中的 `FightRoundNumberDigit` 节点 | 同上 |
+| 3 | `read_round_number()` 去掉「收紧 ROI 再认一次」分支，直接从宽 ROI 结果里取数字（`_extract_round_number` 本来就兼容「标签框 + 纯数字框」两种形态） | `agent/action/fight/battle_action.py` |
+| 4 | `FightEndRound` 节点加固定点击点 `target: [359,1232]` | `assets/resource/base/pipeline/city.json` |
+| 5 | 结束回合点击次数 2 → 3，失败等待 6/12/18 秒 | `agent/action/fight/battle_action.py` |
+| 6 | `BigMapDismissItemGainBanner` 的滑动补 `duration: 1500`（默认 200ms 会被游戏当成点击，而横幅只响应滑动） | `assets/resource/base/pipeline/main_ui.json` |
+
+### 关于「结束回合」点击落点
+
+协议文档写明：`target` 为 4 元矩形时**在矩形内随机选点（中心概率高）**。
+`FightEndRound` 用的是 `target: true`（= 刚识别到的框），落点在
+`[333,1198,53,68]` 内随机 —— 实测两次失败的落点分别是 `(358,1201)`、
+`(340,1229)`，都在框的边缘；同一时刻手动点 `(359,1232)`（框中心）回合立刻推进。
+改成固定 2 元 `target` 后落点唯一。
+
+### 实机验证
+
+| 项 | 结果 |
+| --- | --- |
+| 单测 `python -m unittest discover -s tests` | ✓ **101 tests OK** |
+| `python check_resource.py assets/resource/base` | ✓ All directories checked |
+| 实机 OCR（`TestRoundWithDigit` 探针） | ✓ `回合：` + `4` 两个框都返回（score 0.998 / 0.994） |
+| 实机 OCR（收紧 ROI 探针） | ✗ 确实一次都不命中（证实旧节点是死节点） |
+| 复跑年度任务（4 个月） | ✓ 0 次「两次结束回合均未生效」；每回合一次点击即确认推进 |
+| 复跑年度任务（4 个月，第二轮） | ✓ 第 4/4 个月完成 `12 -> 1`（**跨年翻页正常**） |
+| 复跑年度任务（12 个月，真实配置） | ✓ 见下方「结果回顾」 |
+
+## MaaMCP 跑年度任务的实操要点（2026-11-12）
+
+| # | 坑 | 处理 |
+| --- | --- | --- |
+| 1 | `run_pipeline(start_agent=True)` 报 `Agent 启动失败 (identifier=xxx): connect() 返回 False` | 先 `clear_pipeline_resources()` 再跑：Resource 里残留的 agent 绑定会让新 agent 连不上 |
+| 2 | `stop_pipeline` 之后 controller 从注册表被摘掉 | 重新 `connect_adb_device` 拿新 controller_id |
+| 3 | MCP 返回 `status: succeeded` 可能**早于** agent 真正跑完好几分钟 | 完成与否只看 `assets/debug/custom/<日期>.log` 里的「年度任务处理完成」 |
+| 4 | MCP 会**复用同一 controller_id 上已存在的 agent 进程** | 复跑前用日志行号/消息格式核对跑的是不是新代码（本次靠 `(1/2)` vs `(1/3)` 发现跑的是旧代码） |
+| 5 | `interface.json` 的 `child_exec: ./python/python.exe` 从源码跑不起来 | 临时改成绝对路径 `F:/workspace/MAAGC/.venv/Scripts/python.exe`（收尾要还原） |
+| 6 | 模拟器上战斗卡住时，先用 MCP `screencap` 看画面、`ocr`/`run_pipeline` 跑只读探针 | 别急着改代码；先用只读节点复现识别问题 |
+
+## 结果回顾
+
+- **年度任务**：跨年翻页实测通过（`12 -> 1`），实机跑完一整年。
+- **根因修正**：上一轮「收紧 ROI 单独认数字」的方案方向错了（节点恒不命中），
+  真正的根因是 **OCR 节点的 `expected` 会过滤掉独立文本框**。
+
+## 全年年度任务实跑 + 图层切换改造（2026-11-12，续）
+
+### 一、只跑了 4 个月而不是 12 个月
+
+`auto_task.json` 里 `YearlyTaskMonths.expected = ["12"]`，日志却打
+`年度任务执行月份数: 4`。**不是配置写错，是 MCP 侧的 Resource/Tasker 失配**：
+
+`clear_pipeline_resources()` 只注销了 Resource，**缓存下来的 Tasker 仍绑定旧的
+Resource**。之后 `run_pipeline` 里的 `override_pipeline(merged)` 写进的是**新的**
+Resource，跑任务的 Tasker 根本不用它 → `YearlyTaskMonths` 节点保持旧值。
+
+修复顺序（缺一不可）：
+
+```text
+stop_pipeline(controller_id)      # 从注册表摘掉 controller + tasker + agent
+clear_pipeline_resources()         # 清 Resource
+connect_adb_device(device_name)    # 拿新 controller_id（= 新 tasker）
+run_pipeline(...)                  # 这次 override 才真正落到跑的那个 Resource
+```
+
+修复后日志打出 `年度任务执行月份数: 12`，跑满 12 个月。
+
+### 二、地图图层切换 UI 已改版（`前往群岛` / `前往大陆` 已不存在）
+
+实机验证（MuMu，ADB `127.0.0.1:16448`）：
+
+| 旧 UI | 新 UI（实测） |
+| --- | --- |
+| 大地图上有「前往群岛」「前往大陆」按钮 | **两个按钮都不存在**，`ClickGoToArchipelago` / `ClickGoToContinent` 是死节点 |
+| — | 底部中间页签显示**当前图层名**（大陆「加尔提兰」/ 群岛「瑞格群岛」）；点它弹出图层选择弹窗，列出**其它**图层 |
+
+改造（`city.json` + `fight_utils.py`）：
+
+| 节点 | 说明 |
+| --- | --- |
+| `MapLayerTab` | OCR `[".+"]`，roi `[297,1228,125,52]` —— 读当前图层名 |
+| `MapLayerPopupOpen` | DirectHit 点击 `[360,1185]` —— 打开图层弹窗 |
+| `MapLayerPopupOption` | OCR `[".+"]`，roi `[190,1055,370,65]` —— 弹窗选项，点击时用 `expected` 覆盖成目标图层名 |
+| `MapLayerArchipelago` | OCR「群岛」，roi 同页签 —— 群岛层判据 |
+
+`fight_utils` 新增：`read_map_layer_name` / `remember_continent_layer` /
+`get_continent_layer_name` / `on_archipelago_layer` / `_map_layer_options` /
+`_same_layer` / `switch_map_layer` / `wait_for_map_layer`。
+
+三个踩坑点：
+
+1. **页签文字会被截断**：「加尔提兰」读成「加尔提」→ 图层名比较用**双向子串**，
+   不能严格相等。
+2. **战斗页的「战斗开始」按钮和图层页签在同一块区域**（roi 重叠），
+   OCR 会读成「战斗升始」。记大陆名**必须先确认在大地图上**
+   （`_at_bigmap()`），否则会把按钮文字当图层名记下来（实机复现过）。
+3. **弹窗选项 ROI 必须收紧**到弹窗标签带 `[190,1055,370,65]`；
+   ROI 太宽时弹窗关闭状态下会读出垃圾文本（「办：」）。
+
+### 三、海盗袭击庄园事件改走横幅直点
+
+旧流程：切到群岛层 → 找「海盗侵袭」入口。实测**大陆层大地图上就有横幅**
+「海盗正在袭扰你的庄园。」，点它 → 自动跳群岛并打开「海盗侵袭」准备页。
+
+新链路（`pirate_raid_processor.py`）：
+
+```text
+点横幅 → 进入战斗 → 航海确认(消耗 1 游戏月) → 战斗开始 → AutoFight → 结算 → 切回大陆
+```
+
+分支顺序改为：胜利页 → 战斗页 → 准备页 → 已在战斗 → 已在群岛 → **横幅可见**
+→ 旧式切群岛兜底。每步之前先 `_dismiss_random_popup()` 清随机事件弹窗
+（生娃、佣兵加入等会盖住「进入战斗」按钮）。
+
+### 四、实机验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| `python -m unittest discover -s tests` | ✓ **113 tests OK**（101 基线 + 新增 12 条图层单测） |
+| `python check_resource.py assets/resource/base` | ✓ All directories checked |
+| 全年年度任务（MuMu 实机） | ✓ 21:49:42 → 22:15:51，月份推进 6→8→9→10→11→12→1→2→3→4→5→6→7（跨年），日志 `年度任务处理完成` |
+| 全年运行中的错误 | ✓ 0 次「达到重试上限」/「未确认进度」/「结束回合均未生效」 |
+| 图层切换 | ✓ `切换地图图层: 加尔提` 成功 |
+| 海盗袭击事件 | ✓ 实机打完并结算，横幅消失 |
+
+残留的良性告警（重试即成功，不影响流程）：
+`被动阶段第 1 次点击后回合未变化`、`点击结束回合前仍读不到回合数字基线`。
+
+### 五、收尾
+
+- `assets/interface.json` 的 agent 段**已还原为上游值**
+  （`child_exec: "./python/python.exe"`、`child_args: ["./agent/main.py"]`）。
+  从源码用 MaaMCP 跑 agent 时需要临时改成绝对路径
+  `F:/workspace/MAAGC/.venv/Scripts/python.exe` + `["-u", "../agent/main.py"]`
+  （MCP 把 `.py` 参数解析成 `interface.json` 所在目录下的相对路径，
+  且该仓库没有打包用的 `assets/python/python.exe`）。
+- 删除临时探针文件：`debug/test_round.json`、`debug/hud_round.png`、
+  `debug/tpl_endround.png`（`debug/` 本身在 .gitignore 里）。
+- 新增 `tests/test_map_layer_switch.py`（12 条）：图层名读取、同名判定、
+  大陆名记忆的三种守卫、切换到指定图层、回退到第一个选项、
+  无目标且无回退时失败、已在目标图层时不重复点击。
+
