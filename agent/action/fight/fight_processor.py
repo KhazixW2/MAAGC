@@ -56,6 +56,7 @@ def _recover_yearly_to_bigmap(context: Context, max_steps: int = YEARLY_RECOVERY
         if (
             context.run_recognition("Event_PirateRaid_TravelDialog", img).hit
             or context.run_recognition("Event_PirateRaid_BattlePage", img).hit
+            or context.run_recognition("Event_PirateRaid_EnterBattle", img).hit
         ):
             logger.debug(
                 f"年度流程恢复状态: pirate_raid "
@@ -205,22 +206,16 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
     fight_utils.dismiss_item_gain_banner(context)
 
     # 战后结算或随机事件可能把视角留在群岛层。目标主城位于大陆层，
-    # 此时继续左右滑动永远找不到目标城市；先识别底部“前往大陆”并
-    # 有界切层，看到“前往群岛”或目标城市后才继续。
+    # 此时继续左右滑动永远找不到目标城市；先识别底部页签的图层名，
+    # 在群岛层就通过图层弹窗有界切回大陆层。
     layer_img = screencap(context)
-    if layer_img is not None and context.run_recognition(
-        fight_utils.ARCHIPELAGO_READY_NODE, layer_img
-    ).hit:
+    fight_utils.remember_continent_layer(context, layer_img)
+    if layer_img is not None and fight_utils.on_archipelago_layer(
+        context, layer_img
+    ):
         logger.info("当前位于群岛层，先切换到大陆层")
-        layer_result = context.run_task(fight_utils.ARCHIPELAGO_READY_NODE)
-        if not fight_utils._task_succeeded(layer_result):
-            logger.error("切换到大陆层的点击节点未成功")
-            return False, False
-
-        if not fight_utils._wait_for_recognition(
-            context, fight_utils.CONTINENT_READY_NODES, timeout=5.0
-        ):
-            logger.error("点击前往大陆后未确认进入大陆层")
+        if not fight_utils.switch_map_layer(context, fallback_to_first=True):
+            logger.error("切换到大陆层失败")
             return False, False
 
     def target_city_visible() -> bool:
@@ -315,8 +310,14 @@ def _ensure_at_target_city(context: Context, target_city: str) -> tuple:
     return False, False
 
 
-def detect_and_manage_event(context: Context, screenshot) -> str:
-    """检测事件类型"""
+def detect_and_manage_event(
+    context: Context, screenshot, skip_pirate_raid: bool = False
+) -> str:
+    """检测事件类型
+
+    ``skip_pirate_raid=True`` 时不处理海盗袭击横幅：海盗事件处理器自身
+    会在事件链中间调用本函数做弹窗清理，若那里再触发海盗分支就会递归。
+    """
     # 「获得 xx」掉落横幅是大地图上的模态面板，会吞掉后续所有点击。
     # 它和随机事件一样属于打断流程的浮层，统一在事件流程里清掉，
     # 免得每次找城市都要单独判一次。
@@ -380,7 +381,7 @@ def detect_and_manage_event(context: Context, screenshot) -> str:
         logger.info("检测到佣兵退休事件")
         context.run_task("Event_MercenarieRetire")
         return "mercenary_retire"
-    elif context.run_recognition("Event_PirateRaid", screenshot).hit:
+    elif context.run_recognition("Event_PirateRaid", screenshot).hit and not skip_pirate_raid:
         logger.info("检测到海盗袭击庄园事件，跨图前往群岛作战")
         # PirateRaidProcessor 内部保证战斗结束回到大陆层；
         # 入口先收一次 Esc 防止横幅抖动导致重复触发。

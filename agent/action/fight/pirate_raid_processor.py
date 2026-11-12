@@ -30,6 +30,10 @@ from action.fight.fight_utils import (
 # 这里只放海盗事件自己的节点。
 BATTLE_READY_NODE = "Event_PirateRaid_BattlePage"
 ACTIVE_BATTLE_NODE = "FightEndRound"
+# 横幅节点只用来判断“当前画面上有没有海盗事件”，不执行它的点击动作。
+BANNER_NODE = "Event_PirateRaid"
+# 战斗准备页（标题「海盗侵袭」+「进入战斗」按钮）。
+PREPARE_PAGE_NODE = "Event_PirateRaid_EnterBattle"
 LAYER_SWITCH_TIMEOUT = 10.0
 
 
@@ -127,6 +131,44 @@ def _tap(context: Context, node: str, label: str) -> bool:
     return True
 
 
+def _wait_for_map_screen(context: Context, timeout: float) -> bool:
+    """等待回到地图画面：结算面板消失且底部图层页签可读。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if context.tasker.stopping:
+            return False
+        img = screencap(context)
+        if img is None:
+            time.sleep(0.2)
+            continue
+        if context.run_recognition("Event_PirateRaid_VictoryConfirm", img).hit:
+            time.sleep(0.3)
+            continue
+        if fight_utils.read_map_layer_name(context, img):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def _dismiss_random_popup(context: Context) -> bool:
+    """处理挡在海盗事件链前面的随机事件弹窗。
+
+    事件链的每一步之间游戏都可能弹出随机事件（生娃、佣兵加入等），
+    弹窗会盖住「进入战斗」「战斗开始」这些按钮，不先关掉就会点空。
+    返回 True 表示处理掉了一个弹窗。
+    """
+    from action.fight.fight_processor import detect_and_manage_event
+
+    img = screencap(context)
+    if img is None:
+        return False
+    event_name = detect_and_manage_event(context, img, skip_pirate_raid=True)
+    if event_name:
+        logger.info(f"海盗事件链中处理随机事件: {event_name}")
+        return True
+    return False
+
+
 @AgentServer.custom_action("PirateRaidProcessor")
 class PirateRaidProcessor(CustomAction):
     """执行海盗袭击庄园事件。"""
@@ -161,7 +203,19 @@ class PirateRaidProcessor(CustomAction):
         already_archipelago = bool(
             initial_img is not None
             and not initial_dialog
-            and context.run_recognition(ARCHIPELAGO_READY_NODE, initial_img).hit
+            and fight_utils.on_archipelago_layer(context, initial_img)
+        )
+        # 记下事件开始时所在的大陆图层名，事件跑完要切回去。
+        fight_utils.remember_continent_layer(context, initial_img)
+        # 横幅是否就在当前画面上。横幅在大陆层就能直接点开战斗准备页，
+        # 不需要先切到群岛层（切层按钮「前往群岛」在新版 UI 上已不存在）。
+        banner_visible = bool(
+            initial_img is not None
+            and context.run_recognition(BANNER_NODE, initial_img).hit
+        )
+        at_prepare_page = bool(
+            initial_img is not None
+            and context.run_recognition(PREPARE_PAGE_NODE, initial_img).hit
         )
 
         if initial_dialog:
@@ -192,15 +246,21 @@ class PirateRaidProcessor(CustomAction):
             logger.info("海盗事件：当前已在战斗胜利页，从结算继续")
         elif at_battle_page:
             logger.info("海盗事件：当前已在战斗准备页，从战斗开始继续")
+        elif at_prepare_page:
+            logger.info("海盗事件：当前已在海盗侵袭准备页，从进入战斗继续")
         elif in_active_battle:
             logger.info("海盗事件：当前已经开战，直接交给主动战斗处理器")
         elif already_archipelago:
             logger.info("海盗事件：当前已在群岛层，跳过重复切图")
+        elif banner_visible:
+            # 横幅就在当前画面（大陆层），点它会自动跳到群岛并打开准备页。
+            logger.info("海盗事件：当前画面已有海盗横幅，直接点横幅进准备页")
         else:
             if not fight_utils.ensure_at_bigmap(context):
                 logger.error("海盗事件：无法回到大地图，放弃")
                 return CustomAction.RunResult(success=False)
             if not _tap(context, "ClickGoToArchipelago", "切群岛"):
+                logger.error("海盗事件：无法切到群岛层，放弃")
                 return CustomAction.RunResult(success=False)
             # 海盗袭击期间，单行航海确认后可能直接落到战斗准备页，
             # 也可能先落到群岛地图；二者都是合法的切层终态。
@@ -223,21 +283,31 @@ class PirateRaidProcessor(CustomAction):
             already_archipelago = context.run_recognition(
                 ARCHIPELAGO_READY_NODE, switched_img
             ).hit
+            at_prepare_page = context.run_recognition(
+                PREPARE_PAGE_NODE, switched_img
+            ).hit
 
         # 2. 走「点横幅 → 准备页 → 进入战斗 → 航海 → 战斗画面 →
         #    战斗开始 → AutoFightProcessor」的 pipeline 链。
         if not at_victory and not in_active_battle:
-            nodes = (
-                ("Event_PirateRaid_BattleStart",)
-                if at_battle_page
-                else (
+            if at_battle_page:
+                nodes = ("Event_PirateRaid_BattleStart",)
+            elif at_prepare_page:
+                nodes = (
+                    "Event_PirateRaid_EnterBattle",
+                    "Event_PirateRaid_SailingConfirm",
+                    "Event_PirateRaid_BattleStart",
+                )
+            else:
+                nodes = (
                     "Event_PirateRaid_ClickBanner",
                     "Event_PirateRaid_EnterBattle",
                     "Event_PirateRaid_SailingConfirm",
                     "Event_PirateRaid_BattleStart",
                 )
-            )
             for node in nodes:
+                # 每一步之前先清掉可能盖住按钮的随机事件弹窗。
+                _dismiss_random_popup(context)
                 if not _tap(context, node, "海盗链"):
                     # 任一节点失败都尝试切回大陆，避免下一轮被卡。
                     self._recover_to_continent(context)
@@ -253,13 +323,11 @@ class PirateRaidProcessor(CustomAction):
 
         # 4. 战斗胜利 → 战利品页「确定」+ 经验页「确定」。
         #    Event_PirateRaid_VictoryConfirm 节点里 next 循环指向自身，
-        #    直到命中 Event_PirateRaid_ArchipelagoBack（即回到群岛层）。
+        #    一直点到结算页消失为止。
         if not _tap(context, "Event_PirateRaid_VictoryConfirm", "结算"):
             logger.warning("海盗事件：战利品/经验结算未完成，但继续切回大陆")
-        if not _wait_for_layer_ready(
-            context, ("Event_PirateRaid_ArchipelagoBack",), 10.0, "群岛(战结)"
-        ):
-            logger.warning("海盗事件：未确认回到群岛层，仍尝试切回大陆")
+        if not _wait_for_map_screen(context, 10.0):
+            logger.warning("海盗事件：未确认回到地图，仍尝试切回大陆")
 
         # 5. 切回大陆层。
         if not self._recover_to_continent(context):
@@ -270,16 +338,18 @@ class PirateRaidProcessor(CustomAction):
         return CustomAction.RunResult(success=True)
 
     def _recover_to_continent(self, context: Context) -> bool:
-        img = screencap(context)
-        if (
-            img is not None
-            and find_ready_node(context, CONTINENT_READY_NODES, img)
-            and not _dialog_visible(context, img)
-        ):
+        """切回大陆层。
+
+        新版 UI 没有「前往大陆」按钮，只能靠底部地图页签的图层弹窗切换。
+        大陆图层名在事件开始时（还在大陆层）已经记下。
+        """
+        target = fight_utils.get_continent_layer_name()
+        if fight_utils.read_map_layer_name(context) and not fight_utils.on_archipelago_layer(context):
             logger.info("恢复大陆：当前已经在大陆层")
             return True
-        if not _tap(context, ARCHIPELAGO_READY_NODE, "切大陆"):
+        # 大陆图层名没记住时（事件一开始就在群岛层），退回弹窗第一个选项。
+        if not fight_utils.switch_map_layer(context, target, fallback_to_first=True):
+            logger.error(f"恢复大陆：切换到 {target} 失败")
             return False
-        return _wait_for_layer_ready(
-            context, CONTINENT_READY_NODES, LAYER_SWITCH_TIMEOUT, "大陆"
-        )
+        logger.info(f"恢复大陆：已切回 {target or '弹窗第一个图层'}")
+        return True

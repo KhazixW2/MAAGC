@@ -630,6 +630,7 @@
         "timeout": 3000
     },
     "ClickGoToArchipelago": {
+        "doc": "旧版 UI 的切群岛按钮，当前游戏版本已不存在（底部页签只显示图层名）",
         "recognition": "OCR",
         "expected": [
             "前往群岛"
@@ -645,6 +646,7 @@
         "timeout": 2000
     },
     "ClickGoToContinent": {
+        "doc": "旧版 UI 的切大陆按钮，当前游戏版本已不存在（底部页签只显示图层名）",
         "recognition": "OCR",
         "expected": [
             "前往大陆"
@@ -657,6 +659,62 @@
         ],
         "action": "Click",
         "post_delay": 500,
+        "timeout": 2000
+    },
+    "MapLayerTab": {
+        "doc": "底部中间页签显示当前图层名（大陆名/群岛名），只用于读取，不做点击",
+        "recognition": "OCR",
+        "expected": [
+            ".+"
+        ],
+        "roi": [
+            297,
+            1228,
+            125,
+            52
+        ],
+        "timeout": 2000
+    },
+    "MapLayerPopupOpen": {
+        "doc": "点击底部地图页签，打开图层选择弹窗",
+        "recognition": "DirectHit",
+        "action": "Click",
+        "target": [
+            360,
+            1185
+        ],
+        "post_delay": 800,
+        "timeout": 2000
+    },
+    "MapLayerPopupOption": {
+        "doc": "图层弹窗里的图层名；expected 由调用方按目标图层名覆盖后点击。ROI 只取弹窗下方的名字一行：弹窗关闭时该区域没有文字，识别为空即表示弹窗没开",
+        "recognition": "OCR",
+        "expected": [
+            ".+"
+        ],
+        "roi": [
+            190,
+            1055,
+            370,
+            65
+        ],
+        "action": "Click",
+        "target": true,
+        "post_delay": 800,
+        "timeout": 2000
+    },
+    "MapLayerArchipelago": {
+        "doc": "底部页签显示群岛名时命中，用于判断当前在群岛层",
+        "recognition": "OCR",
+        "expected": [
+            "群岛"
+        ],
+        "roi": [
+            297,
+            1228,
+            125,
+            52
+        ],
         "timeout": 2000
     },
     "CastleSwipeDown": {

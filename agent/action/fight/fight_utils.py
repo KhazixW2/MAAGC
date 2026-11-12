@@ -17,6 +17,19 @@ from .battle_map import BattleSessionRegistry, session_key
 ARCHIPELAGO_READY_NODE = "ClickGoToContinent"
 CONTINENT_READY_NODES = ("ClickGoToArchipelago", "EnterCity")
 
+# 地图图层切换：新版 UI 里底部中间页签显示当前图层名（大陆名/群岛名），
+# 点它会弹出图层选择框，框里列出各个图层名。旧版的「前往群岛 / 前往大陆」
+# 按钮在当前游戏版本上不存在，相关节点已经是死代码。
+MAP_LAYER_TAB_NODE = "MapLayerTab"
+MAP_LAYER_POPUP_OPEN_NODE = "MapLayerPopupOpen"
+MAP_LAYER_POPUP_OPTION_NODE = "MapLayerPopupOption"
+MAP_LAYER_ARCHIPELAGO_NODE = "MapLayerArchipelago"
+MAP_LAYER_POPUP_TIMEOUT = 6.0
+
+# 记住最近一次见到的大陆图层名：战斗/事件会把视角留在群岛层，
+# 切回大陆时需要知道大陆在弹窗里叫什么。名称只识别一次，之后复用。
+_continent_layer_name: Optional[str] = None
+
 # 「获得 xx」奖励横幅：结算后残留在大地图上，会盖住城市名让点击落空。
 # 横幅是屏幕上的模态面板：点面板内部无效，只有在面板之外点一下或滑一下
 # 才会消失，所以关闭动作必须落在横幅之外。
@@ -115,6 +128,168 @@ def find_ready_node(
         if context.run_recognition(node, img).hit:
             return node
     return None
+
+
+def read_map_layer_name(context: Context, img: Any = None) -> Optional[str]:
+    """读取底部地图页签上的当前图层名（大陆名或群岛名）。
+
+    新版 UI 的底部中间页签显示当前所在图层（实测「加尔提兰」「瑞格群岛」），
+    旧版的「前往群岛 / 前往大陆」按钮已经不存在。识别不到时返回 None。
+    """
+    if img is None:
+        img = screencap(context)
+    if img is None:
+        return None
+    detail = context.run_recognition(MAP_LAYER_TAB_NODE, img)
+    if not detail:
+        return None
+    texts = [
+        (getattr(item, "text", "") or "").strip()
+        for item in (getattr(detail, "all_results", None) or [])
+    ]
+    texts = [text for text in texts if text]
+    if not texts:
+        return None
+    # 页签可能和别的文字落在同一个 ROI 里，取最长的一条当作图层名。
+    return max(texts, key=len)
+
+
+def remember_continent_layer(context: Context, img: Any = None) -> Optional[str]:
+    """读取当前图层名；若在大地图上且不是群岛层，就记为大陆图层名。
+
+    必须确认在大地图上：战斗页的「战斗开始」按钮和页签在同一块区域，
+    不做这层校验会把「战斗升始」当成图层名记下来（2026-11-12 实机复现）。
+    """
+    global _continent_layer_name
+    name = read_map_layer_name(context, img)
+    if not name or "群岛" in name:
+        return name
+    if img is None:
+        img = screencap(context)
+    if img is None or not _at_bigmap(context, img):
+        return name
+    _continent_layer_name = name
+    return name
+
+
+def get_continent_layer_name() -> Optional[str]:
+    """返回最近一次记住的大陆图层名。"""
+    return _continent_layer_name
+
+
+def on_archipelago_layer(context: Context, img: Any = None) -> bool:
+    """当前是否在群岛层（底部页签显示群岛名）。"""
+    if img is None:
+        img = screencap(context)
+    if img is None:
+        return False
+    if context.run_recognition(MAP_LAYER_ARCHIPELAGO_NODE, img).hit:
+        return True
+    name = read_map_layer_name(context, img)
+    return bool(name and "群岛" in name)
+
+
+def _map_layer_options(context: Context, img: Any = None) -> list[tuple[str, Any]]:
+    """读取图层选择弹窗里的可选项 [(文本, box)]。"""
+    if img is None:
+        img = screencap(context)
+    if img is None:
+        return []
+    detail = context.run_recognition(MAP_LAYER_POPUP_OPTION_NODE, img)
+    if not detail:
+        return []
+    options = []
+    for item in (getattr(detail, "all_results", None) or []):
+        text = (getattr(item, "text", "") or "").strip()
+        if not text:
+            continue
+        options.append((text, getattr(item, "box", None)))
+    return options
+
+
+def _same_layer(name: Optional[str], target: Optional[str]) -> bool:
+    """两个图层名是否指同一个图层。
+
+    页签上的文字可能被截断（「加尔提兰」读成「加尔提」），
+    所以用双向子串比较，而不是严格相等。
+    """
+    if not name or not target:
+        return False
+    return name in target or target in name
+
+
+def switch_map_layer(
+    context: Context,
+    target_name: Optional[str] = None,
+    fallback_to_first: bool = False,
+) -> bool:
+    """切换到名为 target_name 的图层。
+
+    流程：读当前图层名 → 点底部页签打开图层弹窗 → 在弹窗里找到目标图层并
+    点击 → 等待页签变成目标名。任一步失败都返回 False，不做无界重试。
+    ``target_name`` 为空时用记住的大陆图层名；``fallback_to_first`` 允许
+    在找不到目标名时退回弹窗里的第一个选项（实测图层按「大陆、群岛」顺序
+    排列，第一个就是大陆层）。
+    """
+    target_name = target_name or get_continent_layer_name()
+    if not target_name and not fallback_to_first:
+        logger.error("切换地图图层失败：没有目标图层名")
+        return False
+    current = read_map_layer_name(context)
+    if target_name and _same_layer(current, target_name):
+        logger.info(f"当前已在图层 {current}，无需切换")
+        return True
+
+    options = _map_layer_options(context)
+    if not options:
+        if not _task_succeeded(context.run_task(MAP_LAYER_POPUP_OPEN_NODE)):
+            logger.error("点击地图页签失败，无法打开图层弹窗")
+            return False
+        deadline = time.monotonic() + MAP_LAYER_POPUP_TIMEOUT
+        while time.monotonic() < deadline:
+            time.sleep(0.3)
+            options = _map_layer_options(context)
+            if options:
+                break
+
+    names = [name for name, _ in options]
+    matched = None
+    if target_name:
+        matched = next(
+            (name for name in names if _same_layer(name, target_name)), None
+        )
+    if matched is None and fallback_to_first and names:
+        matched = names[0]
+        logger.warning(f"图层弹窗里没有 {target_name}，回退到第一个图层 {matched}")
+    if matched is None:
+        logger.error(f"图层弹窗中没有 {target_name}，可选图层: {names}")
+        return False
+
+    logger.info(f"切换地图图层: {matched}")
+    result = context.run_task(
+        MAP_LAYER_POPUP_OPTION_NODE,
+        pipeline_override={MAP_LAYER_POPUP_OPTION_NODE: {"expected": [matched]}},
+    )
+    if not _task_succeeded(result):
+        logger.error(f"点击图层 {matched} 失败")
+        return False
+    return wait_for_map_layer(context, matched)
+
+
+def wait_for_map_layer(
+    context: Context, target_name: str, timeout: float = 8.0
+) -> bool:
+    """等待底部页签显示目标图层名。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        current = read_map_layer_name(context)
+        if _same_layer(current, target_name):
+            return True
+        time.sleep(0.3)
+    logger.warning(
+        f"等待图层 {target_name} 超时，当前为 {read_map_layer_name(context)}"
+    )
+    return False
 
 
 def _at_bigmap(context: Context, img: Any) -> bool:

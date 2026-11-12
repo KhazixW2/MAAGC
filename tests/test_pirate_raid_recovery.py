@@ -25,7 +25,7 @@ class FakeContext:
 
     def run_recognition(self, node, img):
         hit = img is self.resumed_img and node == BATTLE_READY_NODE
-        return SimpleNamespace(hit=hit)
+        return SimpleNamespace(hit=hit, all_results=[])
 
     def run_task(self, node):
         self.run_tasks.append(node)
@@ -110,6 +110,14 @@ class PirateRaidRecoveryTests(unittest.TestCase):
                 return_value=True,
             ) as tap,
             patch(
+                "action.fight.pirate_raid_processor._dismiss_random_popup",
+                return_value=False,
+            ),
+            patch(
+                "action.fight.pirate_raid_processor._wait_for_map_screen",
+                return_value=True,
+            ),
+            patch(
                 "action.fight.pirate_raid_processor.fight_utils._task_succeeded",
                 return_value=True,
             ),
@@ -139,7 +147,7 @@ class PirateRaidRecoveryTests(unittest.TestCase):
             ) or (
                 img is bigmap and node == "UI_MainWindows"
             )
-            return SimpleNamespace(hit=hit)
+            return SimpleNamespace(hit=hit, all_results=[])
 
         context.run_recognition = recognize
 
